@@ -5,9 +5,10 @@ inference (llama.cpp) on an **AMD Instinct MI50 (Vega 20, gfx906)** attached to 
 **ARM64** host. The main target is an **Orange Pi 5 Plus (RK3588)** with the card
 on an M.2 to OCuLink adapter. Most of it also applies to other aarch64 hosts.
 
-> **Status: untested.** Nobody has run this end to end on real hardware yet. Each
-> layer below has a check, so you can tell exactly where it breaks. Run
-> `scripts/check-mi50.sh` and keep its output.
+> **Status: not yet run on an MI50.** Everything that can be tested without the
+> card has been; [TESTING.md](TESTING.md) lists exactly what was run and what
+> remains. On real hardware, run `scripts/check-mi50.sh` first and keep its
+> output.
 
 ## The short version
 
@@ -32,8 +33,10 @@ on an M.2 to OCuLink adapter. Most of it also applies to other aarch64 hosts.
    [docs/HARDWARE.md](docs/HARDWARE.md#bar-space).
 3. **The kernel driver is the real risk.** RK3588 PCIe is not cache-coherent,
    and stock amdgpu assumes it is. This is the same class of problem people hit
-   with GPUs on the Raspberry Pi 5. [docs/KERNEL.md](docs/KERNEL.md) covers the
-   kernel config, the firmware, and an experimental patch.
+   with GPUs on the Raspberry Pi 5. Stock Armbian kernels also don't build
+   amdgpu at all. [docs/KERNEL.md](docs/KERNEL.md) covers the Armbian build
+   extension, the firmware, and an experimental patch. For ROCm, the patch
+   must be paired with `HSA_USERPTR_FOR_PAGED_MEM=0`.
 4. **Get Vulkan working first.** llama.cpp's Vulkan backend runs on Mesa RADV,
    which supports gfx906 and ships as an arm64 package. It needs no ROCm at all.
    If Vulkan works, the kernel side is healthy.
@@ -46,7 +49,8 @@ on an M.2 to OCuLink adapter. Most of it also applies to other aarch64 hosts.
 
 ```bash
 # 0. Hardware: external PSU on first, a blower fan on the MI50 (it is passively cooled)
-# 1. Host OS: Armbian (Debian trixie / Ubuntu noble), mainline "edge" kernel >= 6.12
+# 1. Host OS: Armbian (Debian trixie / Ubuntu noble) with a kernel built using
+#    armbian/extensions/mi50-amdgpu.sh + patches/0001 (docs/KERNEL.md)
 sudo ./scripts/check-mi50.sh            # fix the first FAIL, repeat
 
 # 2. Vulkan path
@@ -56,6 +60,7 @@ sudo ./scripts/check-mi50.sh            # fix the first FAIL, repeat
 # 3. ROCm path (optional; takes hours)
 ./scripts/build-rocm-aarch64.sh
 . ./scripts/rocm-env.sh && rocminfo | grep gfx906
+hipcc --offload-arch=gfx906 tests/hip-smoke.hip -o /tmp/hip-smoke && /tmp/hip-smoke
 ./scripts/build-llamacpp.sh hip
 ```
 
@@ -76,8 +81,12 @@ sudo ./scripts/check-mi50.sh            # fix the first FAIL, repeat
 | `scripts/check-mi50.sh` | Read-only diagnostic for each layer (PCIe, BAR, driver, KFD, Vulkan, ROCm) |
 | `scripts/build-llamacpp.sh` | Builds llama.cpp with the `vulkan` or `hip` backend |
 | `scripts/build-rocm-aarch64.sh` | Builds a minimal ROCm 6.3.3 for gfx906 from source; can resume from any stage |
-| `scripts/rocm-env.sh` | Environment for the self-built ROCm |
+| `scripts/rocm-env.sh` | Environment for the self-built ROCm (includes the non-coherent-host setting) |
 | `patches/0001-…` | Experimental amdgpu patch: write-combined GTT on non-coherent hosts |
+| `armbian/extensions/mi50-amdgpu.sh` | Armbian build extension that enables amdgpu + KFD (stock Armbian kernels have neither) |
+| `tests/test-check-mi50.sh` | Runs `check-mi50.sh` against six simulated systems (no hardware needed) |
+| `tests/hip-smoke.hip` | Error-checking HIP test: verifies 1 Mi values round-trip through the GPU |
+| `TESTING.md` | What has been tested, how, and what still needs the real card |
 | `docs/BLUEPRINT-REVIEW.md` | What in the original blueprint is wrong, and why |
 | `docs/HARDWARE.md` | Adapter, power, cooling, BAR space |
 | `docs/KERNEL.md` | Kernel config, firmware, boot parameters, coherency |

@@ -1,0 +1,20 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -x scripts/*.sh tests/*.sh && shellcheck -s bash -e SC2034 armbian/extensions/*.sh
+      - name: check-mi50.sh against fake sysfs trees
+        run: ./tests/test-check-mi50.sh
+      - name: kernel patch applies to supported kernels
+        run: |
+          for tag in v6.12 v6.18 v7.3 master; do
+            d=$(mktemp -d); mkdir -p "$d/drivers/gpu/drm/amd/amdgpu"
+            curl -sSfL "https://raw.githubusercontent.com/torvalds/linux/$tag/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c" \
+              -o "$d/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c"
+            (cd "$d" && patch -p1 --dry-run < "$GITHUB_WORKSPACE"/patches/0001-*.patch) || { echo "does not apply to $tag"; exit 1; }
+            echo "applies to $tag"
+          done

@@ -59,7 +59,7 @@ stage_deps() {
   sudo apt-get install -y --no-install-recommends \
     git cmake ninja-build build-essential lld pkg-config python3 python3-pip python3-venv python3-dev \
     libelf-dev libnuma-dev libdrm-dev libdrm-amdgpu1 libzstd-dev zlib1g-dev libncurses-dev \
-    xxd file gfortran libmsgpack-dev libfmt-dev libsqlite3-dev
+    xxd file gfortran libmsgpack-dev libfmt-dev libsqlite3-dev libgl-dev
   mkdir -p "$SRC"
   if [ ! -w "$(dirname "$ROCM_PATH")" ] && [ ! -w "$ROCM_PATH" ]; then
     sudo mkdir -p "$ROCM_PATH" && sudo chown "$(id -u):$(id -g)" "$ROCM_PATH"
@@ -80,13 +80,27 @@ stage_llvm() {
   log "LLVM/Clang/LLD (ROCm fork) - the long one"
   fetch llvm-project
   # AMDGPU is a normal (non-experimental) LLVM target; "host" = AArch64 on ARM64.
+  # compiler-rt builtins are required: hip::host links libclang_rt.builtins.
   cm "$SRC/llvm-project/llvm" "$SRC/build/llvm" \
     -DCMAKE_INSTALL_PREFIX="$LLVM" \
     -DLLVM_TARGETS_TO_BUILD="host;AMDGPU" \
-    -DLLVM_ENABLE_PROJECTS="clang;lld"  \
+    -DLLVM_ENABLE_PROJECTS="clang;lld" \
+    -DLLVM_ENABLE_RUNTIMES="compiler-rt" \
+    -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
+    -DCOMPILER_RT_BUILD_XRAY=OFF -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
+    -DCOMPILER_RT_BUILD_PROFILE=OFF -DCOMPILER_RT_BUILD_MEMPROF=OFF \
+    -DCOMPILER_RT_BUILD_ORC=OFF -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF \
     -DLLVM_ENABLE_ASSERTIONS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
     -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_ENABLE_ZSTD=ON -DLLVM_USE_LINKER=lld \
     -DLLVM_PARALLEL_LINK_JOBS="${LINK_JOBS:-2}"
+  # Packaged ROCm keeps LLVM in lib/llvm (with llvm as a symlink); hipcc looks there.
+  mkdir -p "$ROCM_PATH/bin" "$ROCM_PATH/lib"
+  ln -sfn ../llvm "$ROCM_PATH/lib/llvm"
+  # AMD's packages provide amdclang/amdclang++; Tensile (rocBLAS) looks for them.
+  for t in clang clang++; do
+    ln -sf "$t" "$LLVM/bin/amd$t"
+    ln -sf "$LLVM/bin/$t" "$ROCM_PATH/bin/amd$t"
+  done
 }
 
 stage_device_libs() {
