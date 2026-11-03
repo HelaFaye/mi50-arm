@@ -1,0 +1,35 @@
+From: mi50-arm <noreply@example.invalid>
+Subject: [PATCH] drm/amdgpu: map GTT write-combined when the device is not DMA-coherent
+
+EXPERIMENTAL, untested on hardware. On arm64 hosts whose PCIe does not snoop
+CPU caches (RK3588 and similar), amdgpu's default cached GTT mappings let the
+CPU and GPU see different data. Force write-combined caching for GTT buffer
+objects when dev_is_dma_coherent() is false.
+
+---
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c
+@@ -31,6 +31,7 @@
+  */
+ 
+ #include <linux/dma-mapping.h>
++#include <linux/dma-map-ops.h>
+ #include <linux/iommu.h>
+ #include <linux/pagemap.h>
+ #include <linux/sched/task.h>
+@@ -1221,6 +1222,15 @@
+ 	else
+ 		caching = ttm_cached;
+ 
++	/*
++	 * On hosts whose PCIe root complex does not snoop CPU caches (e.g.
++	 * Rockchip RK3588), GPU reads of cached system pages can return stale
++	 * data and GPU writes can be hidden behind dirty CPU lines. Map GTT
++	 * as write-combined (Normal-NC on arm64) so the CPU never caches it.
++	 */
++	if (caching == ttm_cached && !dev_is_dma_coherent(adev->dev))
++		caching = ttm_write_combined;
++
+ 	/* allocate space for the uninitialized page entries */
+ 	if (ttm_sg_tt_init(&gtt->ttm, bo, page_flags, caching)) {
+ 		kfree(gtt);
