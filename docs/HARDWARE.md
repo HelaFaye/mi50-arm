@@ -21,9 +21,10 @@
 - Plug both supplies into the same power strip. **Don't** solder extra ground
   wires. The PCIe link already shares ground across many pins.
 - To cut heat and power draw with only a small loss of inference speed, cap
-  the board power once the stack works:
-  `rocm-smi --setpoweroverdrive 150`, or write to
-  `/sys/class/drm/card*/device/hwmon/hwmon*/power1_cap`.
+  the board power once the stack works. The value is in microwatts; this
+  example sets 150 W:
+  `echo 150000000 | sudo tee /sys/class/drm/card*/device/hwmon/hwmon*/power1_cap`.
+  (`rocm-smi` isn't part of the minimal ROCm build here.)
 
 ## Cooling
 
@@ -64,7 +65,13 @@ options, in this order:
    To do this automatically at boot, put `amdgpu` on the module blacklist and
    run the commands above from a systemd unit, followed by `modprobe amdgpu`.
    amdgpu works fine with a small BAR: it uses a 256 MiB window for CPU access
-   and the GPU still sees all 32 GB.
+   and the GPU still sees all 32 GB. amdgpu will try to grow the BAR back to
+   full size, fail for lack of space, and keep 256 MiB, which is the intended
+   outcome. It does *not* do the reverse: it won't shrink a large BAR on its
+   own.
+   Resizing needs **Device Tree boot**. If ACPI firmware asks the OS to
+   preserve its PCI configuration, the kernel refuses every resize with
+   `-ENOTSUPP` (`host->preserve_config` in `pci_resize_resource()`).
 2. **A VBIOS with a small BAR.** Some MI50 VBIOS variants (as found in the
    community VBIOS collections) expose 256 MiB instead of the full VRAM.
    Reflashing is risky. Use `amdvbflash` on an x86 machine, keep a backup of

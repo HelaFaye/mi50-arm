@@ -79,10 +79,10 @@ stage_rocm_cmake() {
 stage_llvm() {
   log "LLVM/Clang/LLD (ROCm fork) - the long one"
   fetch llvm-project
-  # AMDGPU is a normal (non-experimental) LLVM target. AArch64 is the host.
+  # AMDGPU is a normal (non-experimental) LLVM target; "host" = AArch64 on ARM64.
   cm "$SRC/llvm-project/llvm" "$SRC/build/llvm" \
     -DCMAKE_INSTALL_PREFIX="$LLVM" \
-    -DLLVM_TARGETS_TO_BUILD="AArch64;AMDGPU" \
+    -DLLVM_TARGETS_TO_BUILD="host;AMDGPU" \
     -DLLVM_ENABLE_PROJECTS="clang;lld"  \
     -DLLVM_ENABLE_ASSERTIONS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
     -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_ENABLE_ZSTD=ON -DLLVM_USE_LINKER=lld \
