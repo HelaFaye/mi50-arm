@@ -12,14 +12,20 @@ LLAMA_DIR=${LLAMA_DIR:-$HOME/llama.cpp}
 LLAMA_REF=${LLAMA_REF:-master}
 JOBS=${JOBS:-$(nproc)}
 
-need_apt() { command -v apt-get >/dev/null && sudo apt-get install -y --no-install-recommends "$@"; }
+need_apt() {
+  if command -v apt-get >/dev/null; then
+    sudo apt-get install -y --no-install-recommends "$@"
+  else
+    echo "No apt-get: install the equivalents of these yourself: $*"
+  fi
+}
 
 need_apt git cmake ninja-build build-essential pkg-config libcurl4-openssl-dev
 
 if [ ! -d "$LLAMA_DIR/.git" ]; then
-  git clone https://github.com/ggml-org/llama.cpp "$LLAMA_DIR"
+  git clone --depth 1 https://github.com/ggml-org/llama.cpp "$LLAMA_DIR"
 fi
-git -C "$LLAMA_DIR" fetch --depth 1 origin "$LLAMA_REF"
+git -C "$LLAMA_DIR" fetch --depth 1 origin "$LLAMA_REF"   # branch, tag or commit
 git -C "$LLAMA_DIR" checkout -q FETCH_HEAD
 
 case "$BACKEND" in

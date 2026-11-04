@@ -33,11 +33,11 @@ for gfx906.
 
 ## Resources
 
-Measured on a 4-core x86 build machine (see "What has been tested" below):
+Measured during a full build on a 4-core x86 machine ([TESTING.md](../TESTING.md)):
 
-- **Disk:** about 11 GB for sources, build trees and the install before
-  rocBLAS. With rocBLAS, see the measured total in the test log below. Put
-  `SRC` on NVMe or USB SSD storage, not the SD card.
+- **Disk:** about 12 GB in total: 8.9 GB of sources and build trees (which you
+  can delete afterwards) plus 3.3 GB installed in `/opt/rocm`. Put `SRC` on
+  NVMe or USB SSD storage, not the SD card.
 - **RAM:** LLVM linking is the peak. On a 16 GB board use `JOBS=6 LINK_JOBS=1`
   and add 8 GB of swap. On 8 GB, use `JOBS=3` plus swap.
 - **Time:** LLVM took about 1.5 h on 4 x86 cores. Expect 2–4 h on RK3588's 4+4

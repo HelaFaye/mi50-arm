@@ -166,7 +166,7 @@ stage_hipblas_common() {
 stage_rocblas() {
   log "rocBLAS + Tensile kernels for $GFX (long)"
   fetch rocBLAS
-  PATH="$SRC/venv/bin:$PATH" cm "$SRC/rocBLAS" "$SRC/build/rocblas" "${hip_cmake_args[@]}" \
+  PATH="$SRC/venv/bin:$ROCM_PATH/bin:$PATH" cm "$SRC/rocBLAS" "$SRC/build/rocblas" "${hip_cmake_args[@]}" \
     -DBUILD_WITH_TENSILE=ON -DBUILD_WITH_HIPBLASLT=OFF \
     -DBUILD_CLIENTS_TESTS=OFF -DBUILD_CLIENTS_BENCHMARKS=OFF -DBUILD_CLIENTS_SAMPLES=OFF \
     -DBUILD_TESTING=OFF -DTensile_LIBRARY_FORMAT=msgpack -DTensile_CPU_THREADS="$JOBS"
