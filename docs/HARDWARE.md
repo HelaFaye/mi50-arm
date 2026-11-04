@@ -69,9 +69,12 @@ options, in this order:
    full size, fail for lack of space, and keep 256 MiB, which is the intended
    outcome. It does *not* do the reverse: it won't shrink a large BAR on its
    own.
-   Resizing needs **Device Tree boot**. If ACPI firmware asks the OS to
-   preserve its PCI configuration, the kernel refuses every resize with
-   `-ENOTSUPP` (`host->preserve_config` in `pci_resize_resource()`).
+   If ACPI firmware asks the OS to preserve its PCI configuration (a `_DSM`
+   function 5 returning 0), the kernel refuses every resize with `-ENOTSUPP`
+   (`host->preserve_config` in `pci_resize_resource()`). edk2-rk3588's PCIe
+   tables have no `_DSM`, so resizing works in both its ACPI mode and Device
+   Tree mode. In **ACPI mode**, the 64-bit window is 768 MiB, and the largest
+   single BAR is 512 MiB.
 2. **A VBIOS with a small BAR.** Some MI50 VBIOS variants (as found in the
    community VBIOS collections) expose 256 MiB instead of the full VRAM.
    Reflashing is risky. Use `amdvbflash` on an x86 machine, keep a backup of

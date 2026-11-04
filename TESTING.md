@@ -22,6 +22,7 @@ Debian trixie **arm64** chroots under qemu-user.
 | hipcc | Compiled `tests/hip-smoke.hip` for gfx906 and unbundled the code object | contains `amdgcn-amd-amdhsa--gfx906` |
 | rocBLAS | Inspected the installed Tensile library | 156 gfx906 kernel/library files |
 | `build-llamacpp.sh hip` | Full build against the self-built ROCm | builds; `libggml-hip.so` carries 44 MB of gfx906 device code; runs and reports "no ROCm-capable device" without a GPU |
+| Proxmox | Checked Proxmox's own sources: `pve-kernel` (arm64 is a supported arch; config = Ubuntu arm64 annotations + overrides that don't touch amdgpu; patches are applied with `patch --batch -p1`), `pve-container` (`devN` syntax, gid mapping, generated cgroup rules), Ubuntu's arm64 `7.0.0-42-generic` kernel config (`DRM_AMDGPU=m`, `HSA_AMD=y`, `HSA_AMD_SVM=y`, `PCIE_ROCKCHIP_DW_HOST=y`), edk2-rk3588's PCIe ACPI tables (`_CCA 0`, no `_DSM`, 768 MiB MEM64), and the patch applies to v7.0 | consistent with docs/PROXMOX.md; a Proxmox install on the board is **not** tested |
 | Source claims | Checked against upstream source: VFIO's coherency requirement, the RK3588 DT PCIe windows and SMMU, edk2-rk3588 `_CCA`, KFD's PCIe-atomics rules, amdgpu BAR resizing, sysfs `resourceN_resize`, `drm_arch_can_wc_memory`, TTM page handling, libhsakmt userptr allocation, Armbian config/patch/extension mechanics, llama.cpp flags | see [docs/BLUEPRINT-REVIEW.md](docs/BLUEPRINT-REVIEW.md) and [docs/KERNEL.md](docs/KERNEL.md) |
 
 The ROCm build ran natively on x86_64. LLVM's target list is `host;AMDGPU`, so

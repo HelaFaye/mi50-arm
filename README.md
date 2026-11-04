@@ -26,7 +26,8 @@ on an M.2 to OCuLink adapter. Most of it also applies to other aarch64 hosts.
    passthrough on RK3588 cannot work: the kernel refuses to hand a device to
    VFIO unless its IOMMU reports cache coherency, and RK3588's PCIe SMMU
    doesn't. Proxmox still works if you share the GPU into an LXC container
-   (see [docs/PROXMOX.md](docs/PROXMOX.md)).
+   with `pct set <id> -dev0 /dev/kfd,...` (see [docs/PROXMOX.md](docs/PROXMOX.md),
+   which covers the official Proxmox VE 9.2 arm64 build and the community port).
 2. **Check the VRAM BAR before anything else.** The RK3588 PCIe 3.0 x4
    controller has only a **1 GiB** 64-bit memory window. If the MI50 asks for a
    32 GiB BAR, it won't fit, and amdgpu will never load. See
@@ -91,4 +92,4 @@ hipcc --offload-arch=gfx906 tests/hip-smoke.hip -o /tmp/hip-smoke && /tmp/hip-sm
 | `docs/HARDWARE.md` | Adapter, power, cooling, BAR space |
 | `docs/KERNEL.md` | Kernel config, firmware, boot parameters, coherency |
 | `docs/ROCM.md` | Building ROCm on aarch64 and troubleshooting it |
-| `docs/PROXMOX.md` | Keeping Proxmox: an LXC container instead of VFIO |
+| `docs/PROXMOX.md` | Proxmox: official arm64 vs community port, patched kernel, LXC GPU sharing |
