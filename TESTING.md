@@ -10,7 +10,7 @@ Debian trixie **arm64** chroots under qemu-user.
 | Area | What was done | Result |
 | --- | --- | --- |
 | Shell scripts | `shellcheck` on every script, the tests and the Armbian extension | clean |
-| `check-mi50.sh` | `tests/test-check-mi50.sh`: 6 simulated systems (healthy non-coherent RK3588, unassigned 32 GiB BAR, vfio-pci bound, coherent host, ring-test failure, no GPU), with fake sysfs/devicetree trees and mock `lspci`/`dmesg` | 6/6 on x86, Ubuntu arm64 and Debian trixie arm64 (mawk) |
+| `check-mi50.sh` | `tests/test-check-mi50.sh`: 9 simulated systems (healthy non-coherent RK3588, unassigned 32 GiB BAR, the fixed-BAR VBIOS 113-D1631711-100, a Resizable BAR VBIOS, an unknown VBIOS, vfio-pci bound, coherent host, ring-test failure, no GPU), with fake sysfs/devicetree trees and mock `lspci`/`dmesg` | the first 6: 6/6 on x86, Ubuntu arm64 and Debian trixie arm64 (mawk). All 9: 9/9 on x86 |
 | Test suite sensitivity | Mutation test: broke BAR detection on purpose | suite caught it (5/6) |
 | Kernel patch | `patch --dry-run` against `amdgpu_ttm.c` from v6.12, v6.18, v7.3, master (7.4-rc1) | applies to all 4 |
 | Kernel patch | Cross-compiled `amdgpu_ttm.o` for arm64 against v6.12 with `DRM_AMDGPU=m` and `HSA_AMD=y` | compiles |

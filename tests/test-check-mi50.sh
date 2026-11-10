@@ -25,7 +25,7 @@ printf '#!/bin/sh\ncat "$MOCK/dmesg"\n' > "$WORK/bin/dmesg"
 chmod +x "$WORK/bin/"*
 
 # --- fake root builder -------------------------------------------------------
-# mkroot <dir> [bigbar] [vfio] [coherent] [ringfail]
+# mkroot <dir> [bigbar] [vfio] [coherent] [ringfail] [vbios=PART-NUMBER]
 mkroot() {
   local r=$1; shift; local opts=" $* "
   local dt=$r/sys/firmware/devicetree/base
@@ -57,6 +57,8 @@ mkroot() {
     : > "$r/dev/kfd"; : > "$r/dev/dri/renderD128"
     printf 'cpu_cores_count 0\ngfx_target_version 90006\n' > "$r/sys/class/kfd/kfd/topology/nodes/1/properties"
   fi
+  local vb; vb=$(sed -n 's/.* vbios=\([^ ]*\) .*/\1/p' <<<"$opts")
+  [ -n "$vb" ] && echo "$vb" > "$dev/vbios_version"
   printf 'CONFIG_DRM_AMDGPU=m\nCONFIG_HSA_AMD=y\nCONFIG_DRM_AMDGPU_USERPTR=y\n' > "$r/boot/config-6.12.0-test"
   : > "$r/lib/firmware/amdgpu/vega20_gpu_info.bin"
   echo "		LnkSta:	Speed 8GT/s, Width x4 (downgraded)" > "$r/mock/lspci-vv"
@@ -90,6 +92,15 @@ run "healthy non-coherent RK3588" 0 '\[PASS\] found .*1002:66a1' 'PASS\] link is
 
 mkroot "$WORK/bigbar" bigbar; check "$WORK/bigbar"
 run "32 GiB BAR0 unassigned" 1 'FAIL\] BAR0 \(32 GiB\) is NOT assigned' 'resource0_resize exists' 'echo 8 >'
+
+mkroot "$WORK/bigbar100" bigbar vbios=113-D1631711-100; check "$WORK/bigbar100"
+run "fixed-BAR VBIOS cannot fit" 1 'FAIL\] VBIOS 113-D1631711-100 has no Resizable BAR' '113-D1631700-111'
+
+mkroot "$WORK/v420" vbios=113-D1640200-043; check "$WORK/v420"
+run "Resizable BAR VBIOS" 0 'PASS\] VBIOS 113-D1640200-043 supports Resizable BAR' 'Done: 0 failure'
+
+mkroot "$WORK/vbunk" vbios=113-D9999999-001; check "$WORK/vbunk"
+run "unknown VBIOS" 0 'VBIOS 113-D9999999-001: not in the table'
 
 mkroot "$WORK/vfio" vfio; check "$WORK/vfio"
 run "vfio-pci bound (blueprint config)" 1 'FAIL\] vfio-pci is bound' 'FAIL\] /dev/kfd missing'

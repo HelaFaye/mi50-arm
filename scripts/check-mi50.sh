@@ -96,6 +96,31 @@ MSG
   fi
 fi
 
+hdr "VBIOS"
+# Known MI50 32 GB VBIOSes (community VBIOS comparison, see docs/HARDWARE.md#vbios).
+# vbios_version only exists once amdgpu has bound to the card.
+VB=""
+[ -r "$DEV/vbios_version" ] && VB=$(cat "$DEV/vbios_version")
+REBAR=$(lspci -s "$GPU" -vv 2>/dev/null | grep -c 'Resizable BAR')
+case "$VB" in
+  113-D1631711-100)
+    if [ "$BAD" -eq 1 ]; then
+      fail "VBIOS $VB has no Resizable BAR and a 16 GiB BAR0: it can't fit this window. A VBIOS with Resizable BAR is needed (113-D1631700-111 or 113-D1640200-043; docs/HARDWARE.md#vbios)"
+    else
+      warn "VBIOS $VB: no Resizable BAR, and Vulkan sees only 16 GiB of VRAM with it (HIP sees all 32)"
+    fi;;
+  113-D1631700-111|113-D1640200-043|113-D163A1XT-045)
+    pass "VBIOS $VB supports Resizable BAR: BAR0 can be shrunk to 256 MiB";;
+  "")
+    if [ "$REBAR" -gt 0 ]; then
+      echo "  VBIOS version unreadable (amdgpu not bound), but the card has a Resizable BAR capability"
+    else
+      echo "  VBIOS version unreadable (amdgpu not bound). Without Resizable BAR the BAR can't be shrunk; check the VBIOS with amdvbflash -i on an x86 machine"
+    fi;;
+  *)
+    echo "  VBIOS $VB: not in the table in docs/HARDWARE.md#vbios";;
+esac
+
 hdr "Coherency / IOMMU"
 if [ -L "$DEV/iommu_group" ]; then
   echo "  IOMMU group: $(basename "$(readlink "$DEV/iommu_group")")"
