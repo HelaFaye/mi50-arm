@@ -75,13 +75,43 @@ options, in this order:
    tables have no `_DSM`, so resizing works in both its ACPI mode and Device
    Tree mode. In **ACPI mode**, the 64-bit window is 768 MiB, and the largest
    single BAR is 512 MiB.
-2. **A VBIOS with a small BAR.** Some MI50 VBIOS variants (as found in the
-   community VBIOS collections) expose 256 MiB instead of the full VRAM.
-   Reflashing is risky. Use `amdvbflash` on an x86 machine, keep a backup of
-   the original image, and match the memory size (16 GB vs 32 GB) exactly.
+2. **A VBIOS with Resizable BAR.** If the card has no `Physical Resizable
+   BAR` capability, option 1 is impossible, and the VBIOS is the only fix. See
+   [VBIOS](#vbios) for which ones have it. Reflashing is risky. Use
+   `amdvbflash` on an x86 machine, keep a backup of the original image, and
+   match the memory size (16 GB vs 32 GB) exactly.
 
 The 1 GiB window is a hardware limit. A device tree change can't make it
 bigger.
+
+## VBIOS
+
+Whether option 1 above is possible depends on the VBIOS. `check-mi50.sh` reads
+the version (`/sys/bus/pci/devices/<gpu>/vbios_version`, once amdgpu has bound)
+and says which case applies. These are the MI50 32 GB VBIOSes in the community
+comparison at
+<https://gist.github.com/evilJazz/14a4c82a67f2c52a6bb5f9cea02f5e13>:
+
+| VBIOS | Card | Resizable BAR | Full BAR0 | On RK3588 |
+| --- | --- | --- | --- | --- |
+| 113-D1631711-100 | AMD MI50 32 GB (2021) | **no** | 16 GiB | **can't work**: the BAR fits no window and can't be shrunk |
+| 113-D1631700-111 | AMD MI50 32 GB (2020) | yes | 32 GiB | shrink BAR0 to 256 MiB (option 1) |
+| 113-D1640200-043 | Radeon Pro V420 32 GB | yes | 32 GiB | shrink BAR0 to 256 MiB; display output, 178 W cap |
+| 113-D163A1XT-045 | Apple Radeon Pro VII 32 GB | yes | 32 GiB | shrink BAR0 to 256 MiB; PCIe Gen 3 only (RK3588's maximum anyway) |
+
+Limits of that comparison:
+
+- It was done on x86, with AMD's original PCB. Some cards use a simplified PCB,
+  with 240 TMUs and 60 ROPs instead of 256 and 64 (`amdgpu_top -d` shows which).
+  The VBIOSes were not tested on it.
+- With `113-D1631711-100`, even on x86, Vulkan sees only 16 GB of VRAM (HIP
+  sees all 32).
+- Cards with different VBIOS versions in one machine caused ROCm failures in
+  that testing. Use one version across cards.
+
+If amdgpu can't bind because the BAR doesn't fit, `vbios_version` isn't
+available. Then check for the Resizable BAR capability with `lspci -vv`, or
+read the VBIOS on an x86 machine with `amdvbflash -i`.
 
 ## Other aarch64 hosts
 
