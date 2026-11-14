@@ -11,6 +11,8 @@ Debian trixie **arm64** chroots under qemu-user.
 | --- | --- | --- |
 | Shell scripts | `shellcheck` on every script, the tests and the Armbian extension | clean |
 | `check-mi50.sh` | `tests/test-check-mi50.sh`: 9 simulated systems (healthy non-coherent RK3588, unassigned 32 GiB BAR, the fixed-BAR VBIOS 113-D1631711-100, a Resizable BAR VBIOS, an unknown VBIOS, vfio-pci bound, coherent host, ring-test failure, no GPU), with fake sysfs/devicetree trees and mock `lspci`/`dmesg` | the first 6: 6/6 on x86, Ubuntu arm64 and Debian trixie arm64 (mawk). All 9: 9/9 on x86 |
+| `arm-cpu.sh` | `tests/test-arm-cpu.sh`: 9 cases on fake `/proc/cpuinfo` and capacity trees (RK3588, a mixed machine where only the fast cores have i8mm, a uniform Neoverse-V2 server, x86) and fake llama.cpp builds (portable, i8mm, ARMv8.6, native, missing) | 9/9 on x86 |
+| `gpu-parity.sh` | `tests/test-gpu-parity.sh`: a stand-in `test-backend-ops` for a matching GPU, a mismatching one and a CPU-only build; plus a real `test-backend-ops` from llama.cpp b12242 on a CPU-only machine (exit 3, "no GPU backend") | 4/4; the real binary behaved as the stand-in |
 | Test suite sensitivity | Mutation test: broke BAR detection on purpose | suite caught it (5/6) |
 | Kernel patch | `patch --dry-run` against `amdgpu_ttm.c` from v6.12, v6.18, v7.3, master (7.4-rc1) | applies to all 4 |
 | Kernel patch | Cross-compiled `amdgpu_ttm.o` for arm64 against v6.12 with `DRM_AMDGPU=m` and `HSA_AMD=y` | compiles |
@@ -56,10 +58,12 @@ In order:
 1. Does the MI50 enumerate over the OCuLink link, at Gen3 x4?
 2. Does BAR0 fit in RK3588's window, or does the resize step in `docs/HARDWARE.md` work?
 3. Does amdgpu probe and pass its ring/IB tests **with** `patches/0001`? (Comparing with and without it is the key experiment.)
-4. Vulkan: `llama-bench` on a real model.
-5. ROCm: `tests/hip-smoke.hip`, then `llama-bench` with the HIP build.
+4. Vulkan: `scripts/gpu-parity.sh` (every operation matches the CPU), then `llama-bench` on a real model.
+5. ROCm: `tests/hip-smoke.hip`, `scripts/gpu-parity.sh -b ROCm0`, then `llama-bench` with the HIP build.
 6. The Proxmox LXC sharing in `docs/PROXMOX.md`.
 7. A native build of the ROCm script on the board (time and RAM).
+8. `scripts/arm-cpu.sh` on the real board: the A55/A76 capacities and feature lists it reads.
+9. mx-llama.cpp (`LLAMA_FORK=mx`): builds against the self-built ROCm, then passes `gpu-parity.sh`.
 
 CI (`.github/workflows/ci.yml`) reruns shellcheck, the fake-sysfs tests and
 the patch-applies check on every push.

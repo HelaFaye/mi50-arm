@@ -9,6 +9,10 @@ jobs:
         run: shellcheck -x scripts/*.sh tests/*.sh && shellcheck -s bash -e SC2034 armbian/extensions/*.sh
       - name: check-mi50.sh against fake sysfs trees
         run: ./tests/test-check-mi50.sh
+      - name: arm-cpu.sh against fake cpuinfo trees
+        run: ./tests/test-arm-cpu.sh
+      - name: gpu-parity.sh with a stand-in test-backend-ops
+        run: ./tests/test-gpu-parity.sh
       - name: kernel patch applies to supported kernels
         run: |
           for tag in v6.12 v6.18 v7.3 master; do
