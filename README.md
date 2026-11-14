@@ -56,6 +56,7 @@ sudo ./scripts/check-mi50.sh            # fix the first FAIL, repeat
 
 # 2. Vulkan path
 ./scripts/build-llamacpp.sh vulkan
+LLAMA_BIN=~/llama.cpp/build-vulkan/bin ./scripts/gpu-parity.sh   # GPU results match the CPU's? (docs/HOST-CPU.md)
 ~/llama.cpp/build-vulkan/bin/llama-bench -m model.gguf -ngl 99
 
 # 3. ROCm path (optional; takes hours)
@@ -73,14 +74,23 @@ hipcc --offload-arch=gfx906 tests/hip-smoke.hip -o /tmp/hip-smoke && /tmp/hip-sm
 - **Memory:** with 32 GB of HBM2 you can fully offload models up to about 30B
   parameters at Q4/Q5, or 70B at roughly Q3 with a small context.
 - **Host CPU:** the A76 cores matter during prompt processing and sampling.
-  Pin llama.cpp to them (`taskset -c 4-7` on RK3588).
+  Pin llama.cpp to them with its own flags, `-t 4 -C 0xF0 --cpu-strict 1` on RK3588; `scripts/arm-cpu.sh` works
+  them out for any ARM board and checks that a build doesn't use instructions the CPU lacks
+  ([docs/HOST-CPU.md](docs/HOST-CPU.md)). Every core, or a longer thread spin, may be faster still;
+  `scripts/cpu-threads-bench.sh` measures it on your model.
+- **mx-llama.cpp:** a llama.cpp fork tuned for gfx906 (weight repack, multi-GPU `-tps`). Build it with
+  `LLAMA_FORK=mx ./scripts/build-llamacpp.sh hip`. Run it with `-lm dio`, and don't set
+  `HSA_FORCE_FINE_GRAIN_PCIE=1` on RK3588, because the board's PCIe isn't coherent.
 
 ## Repo layout
 
 | Path | What it is |
 | --- | --- |
 | `scripts/check-mi50.sh` | Read-only diagnostic for each layer (PCIe, BAR, driver, KFD, Vulkan, ROCm) |
-| `scripts/build-llamacpp.sh` | Builds llama.cpp with the `vulkan` or `hip` backend |
+| `scripts/build-llamacpp.sh` | Builds llama.cpp, or the gfx906-tuned mx-llama.cpp fork (`LLAMA_FORK=mx`), with the `vulkan` or `hip` backend |
+| `scripts/arm-cpu.sh` | What the ARM cores can execute: portable build flags, thread pinning, and a check that a build doesn't use missing instructions |
+| `scripts/cpu-threads-bench.sh` | Times llama.cpp with the fast cores, every core, and a longer thread spin, so the thread setup is measured rather than assumed |
+| `scripts/gpu-parity.sh` | Compares every operation on the GPU with the CPU (llama.cpp's `test-backend-ops`): catches stale reads from non-coherent PCIe |
 | `scripts/build-rocm-aarch64.sh` | Builds a minimal ROCm 6.3.3 for gfx906 from source; can resume from any stage |
 | `scripts/rocm-env.sh` | Environment for the self-built ROCm (includes the non-coherent-host setting) |
 | `patches/0001-…` | Experimental amdgpu patch: write-combined GTT on non-coherent hosts |
