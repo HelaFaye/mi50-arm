@@ -11,6 +11,8 @@ jobs:
         run: ./tests/test-check-mi50.sh
       - name: arm-cpu.sh against fake cpuinfo trees
         run: ./tests/test-arm-cpu.sh
+      - name: cpu-threads-bench.sh with a stand-in llama-bench
+        run: ./tests/test-cpu-threads-bench.sh
       - name: gpu-parity.sh with a stand-in test-backend-ops
         run: ./tests/test-gpu-parity.sh
       - name: kernel patch applies to supported kernels

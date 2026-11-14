@@ -12,6 +12,7 @@ Debian trixie **arm64** chroots under qemu-user.
 | Shell scripts | `shellcheck` on every script, the tests and the Armbian extension | clean |
 | `check-mi50.sh` | `tests/test-check-mi50.sh`: 9 simulated systems (healthy non-coherent RK3588, unassigned 32 GiB BAR, the fixed-BAR VBIOS 113-D1631711-100, a Resizable BAR VBIOS, an unknown VBIOS, vfio-pci bound, coherent host, ring-test failure, no GPU), with fake sysfs/devicetree trees and mock `lspci`/`dmesg` | the first 6: 6/6 on x86, Ubuntu arm64 and Debian trixie arm64 (mawk). All 9: 9/9 on x86 |
 | `arm-cpu.sh` | `tests/test-arm-cpu.sh`: 9 cases on fake `/proc/cpuinfo` and capacity trees (RK3588, a mixed machine where only the fast cores have i8mm, a uniform Neoverse-V2 server, x86) and fake llama.cpp builds (portable, i8mm, ARMv8.6, native, missing) | 9/9 on x86 |
+| `cpu-threads-bench.sh` | `tests/test-cpu-threads-bench.sh`: a stand-in `llama-bench` whose speed depends on threads, pinning and spin; fake RK3588 and uniform-core trees. Checks the setups, the masks, that the spin goes only to `+spin` runs (`GOMP_SPINCOUNT` for OpenMP builds, `--poll 100` otherwise), the reversed second round, the averages and the named winners, and the failure exits | 9/9 on x86 |
 | `gpu-parity.sh` | `tests/test-gpu-parity.sh`: a stand-in `test-backend-ops` for a matching GPU, a mismatching one and a CPU-only build; plus a real `test-backend-ops` from llama.cpp b12242 on a CPU-only machine (exit 3, "no GPU backend") | 4/4; the real binary behaved as the stand-in |
 | Test suite sensitivity | Mutation test: broke BAR detection on purpose | suite caught it (5/6) |
 | Kernel patch | `patch --dry-run` against `amdgpu_ttm.c` from v6.12, v6.18, v7.3, master (7.4-rc1) | applies to all 4 |
@@ -63,6 +64,7 @@ In order:
 6. The Proxmox LXC sharing in `docs/PROXMOX.md`.
 7. A native build of the ROCm script on the board (time and RAM).
 8. `scripts/arm-cpu.sh` on the real board: the A55/A76 capacities and feature lists it reads.
+   Then `scripts/cpu-threads-bench.sh` on a real model, CPU only and with `-ngl 99`: do every core, or the longer spin, beat the four A76 cores?
 9. mx-llama.cpp (`LLAMA_FORK=mx`): builds against the self-built ROCm, then passes `gpu-parity.sh`.
 
 CI (`.github/workflows/ci.yml`) reruns shellcheck, the fake-sysfs tests and

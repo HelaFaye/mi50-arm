@@ -4,7 +4,7 @@ The MI50 does the heavy work, but the board's CPU still matters. It reads prompt
 token, and runs any layers or experts left on the CPU (`-ot exps=CPU` for a large mixture of experts). It is also
 the reference the GPU's results are checked against.
 
-The two tools here borrow from [Llaminar](https://github.com/Llaminar/llaminar)'s native ARM port
+The tools here borrow from [Llaminar](https://github.com/Llaminar/llaminar)'s native ARM port
 (`feat/arm64-native-kernels`). Llaminar is its own inference engine, and its NEON kernels can't be dropped into
 llama.cpp, but two of its rules carry over:
 
@@ -38,7 +38,39 @@ It reads each core's features from `/proc/cpuinfo` and its capacity from sysfs.
   cores could run gets a warning to pin it to them.
 - **Threads:** pin llama.cpp to the fast cores with its own affinity flags rather than `taskset`. Each thread is
   then placed on one A76 core (`--cpu-strict 1`), and the A55 cores stay free for the GPU driver and the system.
-  `-tb` and `-Cb` do the same for prompt processing.
+  `-tb` and `-Cb` do the same for prompt processing. That is a safe start, not the proven best: measure it with
+  `cpu-threads-bench.sh` (below).
+
+## `scripts/cpu-threads-bench.sh`
+
+```bash
+./scripts/cpu-threads-bench.sh ~/models/model.gguf                          # CPU only
+./scripts/cpu-threads-bench.sh ~/models/moe.gguf -- -ngl 99 -ot exps=CPU    # experts on the CPU
+```
+
+Which thread setup is fastest for a model on this board, measured with `llama-bench`. It times prompt processing
+and generation for:
+
+| Setup | Threads |
+| --- | --- |
+| `fast` | the fast cores only, one thread pinned to each (what `arm-cpu.sh` suggests) |
+| `all` | every core, one thread pinned to each |
+| `all-free` | every core, placed by the kernel's scheduler |
+| `…+spin` | the same, with threads that wait longer before sleeping between jobs: `GOMP_SPINCOUNT=3000000` (libgomp's default is 300000), or `--poll 100` for a build without OpenMP |
+
+Arguments after `--` go to every run, so the GPU setup you actually use is the one measured. `ROUNDS` (default 2)
+and `REPS` (default 3) set how long it takes.
+
+Why measure rather than assume: Llaminar measured on NVIDIA's GB10 (10 fast and 10 slower cores) that every core
+beat the fast cores alone by 22.8%, and that the longer spin raised one model's generation from 13.2 to 18.7
+tokens/s (`docs/v2/projects/2026-11/arm-perf-review`, ideas 05 and 13, on its `codex/arm-perf-review` branch).
+llama.cpp hands out matrix work in small pieces the same way, so the A55 cores can help. But it splits the smaller
+operations evenly between threads, an A55 is 3–4× slower than an A76, and RK3588's memory bandwidth may be the
+limit anyway. The spin matters most when several CPU jobs run per token, as with partial GPU offload.
+
+The script keeps Llaminar's method: the setups run in order, then in reverse in the next round (A B B A), and the
+rounds are averaged, so a board heating up doesn't favour whichever setup ran first. A difference of a few percent
+is noise; use `ROUNDS=4` before changing your setup on it.
 
 ## `scripts/gpu-parity.sh`
 
