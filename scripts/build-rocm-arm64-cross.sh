@@ -11,6 +11,8 @@ TAG="rocm-$ROCM_VER"
 WORK_ROOT=${WORK_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/mi50-arm64-cross}
 CROSS_COMPILER=${CROSS_COMPILER:-clang} # clang | gcc
 JOBS=${JOBS:-$(nproc)}
+LLVM_JOBS=${LLVM_JOBS:-$(( JOBS > 4 ? 4 : JOBS ))}
+LINK_JOBS=${LINK_JOBS:-1}
 SYSROOT_TAR=${SYSROOT_TAR:-}
 SYSROOT_SOURCE_IMG=${SYSROOT_SOURCE_IMG:-}
 REQUIRE_MOUNT_POINT=${REQUIRE_MOUNT_POINT:-}
@@ -21,9 +23,12 @@ SYSROOT="$WORK_ROOT/sysroot"
 SRC="$WORK_ROOT/sources"
 BLD="$WORK_ROOT/builds"
 TOOLCHAIN_DIR="$WORK_ROOT/toolchain"
+HOST_ROCM="$WORK_ROOT/host-rocm"
+HOST_LLVM="$HOST_ROCM/llvm"
+HOST_VENV="$WORK_ROOT/host-venv"
 TARGET_ROCM="$WORK_ROOT/target-rocm"
 DOWNLOADS="$WORK_ROOT/downloads"
-STAGES=(preflight sysroot toolchain fetch rocr rocminfo verify)
+STAGES=(preflight sysroot toolchain host_venv fetch rocm_cmake host_llvm device_libs rocr rocminfo verify)
 STAGING_SYSROOT=""
 
 log() { printf '\n[mi50-cross] %s\n' "$*"; }
@@ -72,7 +77,7 @@ ensure_work_root_safe() {
   if [ -n "$REQUIRED_MOUNT_FSTYPE" ] && [ "$fstype" != "$REQUIRED_MOUNT_FSTYPE" ]; then
     die "WORK_ROOT filesystem is '$fstype', expected '$REQUIRED_MOUNT_FSTYPE'"
   fi
-  mkdir -p "$SRC" "$BLD" "$TOOLCHAIN_DIR" "$TARGET_ROCM" "$DOWNLOADS"
+  mkdir -p "$SRC" "$BLD" "$TOOLCHAIN_DIR" "$HOST_ROCM" "$TARGET_ROCM" "$DOWNLOADS"
   log "Workspace verified: $WORK_ROOT (mount=$target, type=$fstype, rw)"
 }
 
@@ -88,6 +93,7 @@ stage_preflight() {
   done
   command -v clang >/dev/null 2>&1 || die "Host clang is required for AMDGPU shader assembly"
   command -v llvm-objcopy >/dev/null 2>&1 || die "Host llvm-objcopy is required for shader extraction"
+  command -v llvm-strip >/dev/null 2>&1 || die "Host llvm-strip is required for cross-built Release stripping"
   clang --print-targets 2>/dev/null | grep -qi amdgpu || die "Host clang has no AMDGPU backend"
   printf '.text\n' | clang -x assembler -target amdgcn-amd-amdhsa -mcpu=gfx906 -c - -o /dev/null \
     || die "Host clang cannot assemble gfx906 AMDGPU input"
@@ -316,12 +322,13 @@ stage_toolchain() {
   log "Creating isolated cross toolchain and host LLVM package shims"
   ensure_work_root_safe
   verify_sysroot_contents "$SYSROOT"
-  local shim_dir tc_file host_clang host_clangxx host_objcopy gcc_dir llvm_ver
+  local shim_dir tc_file host_clang host_clangxx host_objcopy host_strip gcc_dir llvm_ver
   shim_dir="$TOOLCHAIN_DIR/host-llvm-cmake"
   mkdir -p "$shim_dir"
   host_clang=$(command -v clang)
   host_clangxx=$(command -v clang++)
   host_objcopy=$(command -v llvm-objcopy)
+  host_strip=$(command -v llvm-strip)
   llvm_ver=23.1.5
   if command -v llvm-config >/dev/null 2>&1; then llvm_ver=$(llvm-config --version); fi
 
@@ -380,8 +387,13 @@ set(ENV{PKG_CONFIG_LIBDIR} "$SYSROOT/usr/lib/aarch64-linux-gnu/pkgconfig:$SYSROO
 set(ENV{PKG_CONFIG_SYSROOT_DIR} "$SYSROOT")
 set(PKG_CONFIG_EXECUTABLE "/usr/bin/pkg-config" CACHE FILEPATH "Host pkg-config with Noble-only search paths" FORCE)
 
-set(LLVM_DIR "$shim_dir" CACHE PATH "Host LLVM executable shim" FORCE)
-set(Clang_DIR "$shim_dir" CACHE PATH "Host Clang executable shim" FORCE)
+set(CMAKE_STRIP "$host_strip" CACHE FILEPATH "AArch64-capable llvm-strip" FORCE)
+if(NOT DEFINED LLVM_DIR)
+  set(LLVM_DIR "$shim_dir" CACHE PATH "Host LLVM executable shim")
+endif()
+if(NOT DEFINED Clang_DIR)
+  set(Clang_DIR "$shim_dir" CACHE PATH "Host Clang executable shim")
+endif()
 EOF_CMAKE
 
   if [ "$CROSS_COMPILER" = clang ]; then
@@ -457,13 +469,96 @@ apply_patch_idempotent() {
   fi
 }
 
+stage_host_venv() {
+  log "Preparing host Python build-helper venv"
+  ensure_work_root_safe
+  if [ ! -x "$HOST_VENV/bin/python" ]; then
+    python3 -m venv "$HOST_VENV"
+  fi
+  "$HOST_VENV/bin/python" -c 'import yaml, msgpack, joblib, CppHeaderParser' >/dev/null 2>&1 || \
+    "$HOST_VENV/bin/pip" install -q --upgrade pip pyyaml msgpack joblib CppHeaderParser
+}
+
 stage_fetch() {
   log "Fetching pinned ROCm $TAG source trees"
   ensure_work_root_safe
+  clone_rocm_repo rocm-cmake rocm-cmake
+  clone_rocm_repo llvm-project llvm-project
   clone_rocm_repo ROCR-Runtime ROCR-Runtime
   clone_rocm_repo rocminfo rocminfo
   apply_patch_idempotent "$SRC/rocminfo" "$REPO_ROOT/patches/0001-rocminfo-cross-system-processor.patch"
   apply_patch_idempotent "$SRC/ROCR-Runtime" "$REPO_ROOT/patches/0002-rocr-runtime-aarch64-intrinsics.patch"
+  apply_patch_idempotent "$SRC/llvm-project" "$REPO_ROOT/patches/0003-device-libs-cmake4-cmp0053.patch"
+}
+
+stage_rocm_cmake() {
+  log "Installing rocm-cmake ($TAG) to host and target prefixes"
+  [ -d "$SRC/rocm-cmake/.git" ] || die "Run fetch stage first"
+  local prefix
+  for prefix in "$HOST_ROCM" "$TARGET_ROCM"; do
+    cmake -S "$SRC/rocm-cmake" -B "$BLD/rocm-cmake" -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX="$prefix"
+    cmake --build "$BLD/rocm-cmake" --parallel "$JOBS"
+    cmake --install "$BLD/rocm-cmake"
+  done
+}
+
+stage_host_llvm() {
+  log "Building host ROCm LLVM/Clang/LLD (X86;AArch64;AMDGPU, LLVM_JOBS=$LLVM_JOBS, LINK_JOBS=$LINK_JOBS)"
+  [ -d "$SRC/llvm-project/.git" ] || die "Run fetch stage first"
+  local host_clang host_clangxx t
+  host_clang=$(command -v clang)
+  host_clangxx=$(command -v clang++)
+  cmake -S "$SRC/llvm-project/llvm" -B "$BLD/host-llvm" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER="$host_clang" \
+    -DCMAKE_CXX_COMPILER="$host_clangxx" \
+    -DCMAKE_CXX_FLAGS="-include cstdint" \
+    -DCMAKE_INSTALL_PREFIX="$HOST_LLVM" \
+    -DLLVM_TARGETS_TO_BUILD="X86;AArch64;AMDGPU" \
+    -DLLVM_ENABLE_PROJECTS="clang;lld" \
+    -DLLVM_ENABLE_ASSERTIONS=OFF \
+    -DLLVM_INCLUDE_TESTS=OFF \
+    -DLLVM_INCLUDE_BENCHMARKS=OFF \
+    -DLLVM_INCLUDE_EXAMPLES=OFF \
+    -DLLVM_INCLUDE_DOCS=OFF \
+    -DLLVM_BUILD_DOCS=OFF \
+    -DLLVM_ENABLE_TERMINFO=OFF \
+    -DLLVM_ENABLE_LIBXML2=OFF \
+    -DLLVM_ENABLE_LIBEDIT=OFF \
+    -DLLVM_ENABLE_ZLIB=ON \
+    -DLLVM_ENABLE_ZSTD=ON \
+    -DLLVM_USE_LINKER=lld \
+    -DLLVM_PARALLEL_LINK_JOBS="$LINK_JOBS"
+  cmake --build "$BLD/host-llvm" --parallel "$LLVM_JOBS"
+  cmake --install "$BLD/host-llvm"
+  mkdir -p "$HOST_ROCM/bin" "$HOST_ROCM/lib"
+  ln -sfn ../llvm "$HOST_ROCM/lib/llvm"
+  for t in clang clang++; do
+    ln -sf "$t" "$HOST_LLVM/bin/amd$t"
+    ln -sf "$HOST_LLVM/bin/$t" "$HOST_ROCM/bin/amd$t"
+  done
+}
+
+stage_device_libs() {
+  log "Building ROCm Device Libs (AMDGCN bitcode)"
+  [ -d "$SRC/llvm-project/.git" ] || die "Run fetch stage first"
+  [ -x "$HOST_LLVM/bin/clang" ] || die "Run host_llvm stage first"
+  [ -f "$HOST_ROCM/share/rocm/cmake/ROCMConfig.cmake" ] || die "Run rocm_cmake stage first"
+  apply_patch_idempotent "$SRC/llvm-project" "$REPO_ROOT/patches/0003-device-libs-cmake4-cmp0053.patch"
+  local host_clang host_clangxx
+  host_clang=$(command -v clang)
+  host_clangxx=$(command -v clang++)
+  cmake -S "$SRC/llvm-project/amd/device-libs" -B "$BLD/device-libs" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER="$host_clang" \
+    -DCMAKE_CXX_COMPILER="$host_clangxx" \
+    -DCMAKE_CXX_FLAGS="-include cstdint" \
+    -DCMAKE_PREFIX_PATH="$HOST_LLVM;$HOST_ROCM" \
+    -DCMAKE_INSTALL_PREFIX="$TARGET_ROCM"
+  cmake --build "$BLD/device-libs" --parallel "$JOBS"
+  cmake --install "$BLD/device-libs"
 }
 
 stage_rocr() {
@@ -642,7 +737,11 @@ run_stage() {
     preflight) stage_preflight ;;
     sysroot) stage_sysroot ;;
     toolchain) stage_toolchain ;;
+    host_venv) stage_host_venv ;;
     fetch) stage_fetch ;;
+    rocm_cmake) stage_rocm_cmake ;;
+    host_llvm) stage_host_llvm ;;
+    device_libs) stage_device_libs ;;
     rocr) stage_rocr ;;
     rocminfo) stage_rocminfo ;;
     verify) stage_verify ;;

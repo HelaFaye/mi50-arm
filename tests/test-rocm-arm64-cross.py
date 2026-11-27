@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / "scripts/build-rocm-arm64-cross.sh").read_text()
 PATCH = (ROOT / "patches/0001-rocminfo-cross-system-processor.patch").read_text()
 ROCR_PATCH = (ROOT / "patches/0002-rocr-runtime-aarch64-intrinsics.patch").read_text()
+DEVICELIBS_PATCH = (ROOT / "patches/0003-device-libs-cmake4-cmp0053.patch").read_text()
 GITIGNORE = (ROOT / ".gitignore").read_text().splitlines()
 
 checks = {
@@ -66,6 +67,16 @@ checks = {
     "ELF validation checks architecture, dependency closure and Noble ABI ceilings": (
         "DT_NEEDED" in SCRIPT and "GLIBCXX': (3, 4, 32)" in SCRIPT
         and "GLIBC': (2, 39)" in SCRIPT and "AArch64" in SCRIPT
+    ),
+    "Milestone 2 host LLVM builds X86/AArch64/AMDGPU with lld and installs device-libs": (
+        "LLVM_TARGETS_TO_BUILD=\"X86;AArch64;AMDGPU\"" in SCRIPT
+        and "stage_device_libs" in SCRIPT
+        and "llvm-strip" in SCRIPT
+    ),
+    "device-libs CMake 4 policy patch is wired into fetch and device_libs stages": (
+        "0003-device-libs-cmake4-cmp0053.patch" in SCRIPT
+        and "CMP0053" in DEVICELIBS_PATCH
+        and 'VERSION_LESS "4.0"' in DEVICELIBS_PATCH
     ),
     "QEMU accepts only HSA success, absent-KFD diagnostics, or verified unemulated KFD ioctl": (
         "Unable to open /dev/kfd read-write:" in SCRIPT
