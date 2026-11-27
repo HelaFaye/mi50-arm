@@ -1,0 +1,46 @@
+diff --git a/amd/comgr/cmake/bc2h.cmake b/amd/comgr/cmake/bc2h.cmake
+index 1111111..2222222 100644
+--- a/amd/comgr/cmake/bc2h.cmake
++++ b/amd/comgr/cmake/bc2h.cmake
+@@ -38,6 +38,11 @@ file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/bc2h.c
+ ")
+ 
+-add_executable(bc2h ${CMAKE_CURRENT_BINARY_DIR}/bc2h.c)
+-if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+-  target_compile_definitions(bc2h PRIVATE -D_CRT_SECURE_NO_WARNINGS)
++if(COMGR_HOST_BC2H)
++  add_executable(bc2h IMPORTED)
++  set_target_properties(bc2h PROPERTIES IMPORTED_LOCATION "${COMGR_HOST_BC2H}")
++else()
++  add_executable(bc2h ${CMAKE_CURRENT_BINARY_DIR}/bc2h.c)
++  if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
++    target_compile_definitions(bc2h PRIVATE -D_CRT_SECURE_NO_WARNINGS)
++  endif()
+ endif()
+diff --git a/amd/comgr/cmake/opencl_pch.cmake b/amd/comgr/cmake/opencl_pch.cmake
+index 1111111..2222222 100644
+--- a/amd/comgr/cmake/opencl_pch.cmake
++++ b/amd/comgr/cmake/opencl_pch.cmake
+@@ -37,12 +37,20 @@ function(generate_pch version)
+   endif()
+ 
++  if(COMGR_HOST_CLANG)
++    set(_comgr_pch_clang "${COMGR_HOST_CLANG}")
++    set(_comgr_pch_clang_dep "${COMGR_HOST_CLANG}")
++  else()
++    set(_comgr_pch_clang "$<TARGET_FILE:clang>")
++    set(_comgr_pch_clang_dep clang)
++  endif()
++
+   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/opencl${version}-c.pch
+-    COMMAND $<TARGET_FILE:clang> -cc1 -x cl-header -triple amdgcn-amd-amdhsa
++    COMMAND ${_comgr_pch_clang} -cc1 -x cl-header -triple amdgcn-amd-amdhsa
+     -Werror -O3 -Dcl_khr_fp64 -Dcl_khr_fp16 -DNDEBUG -cl-std=CL${version}
+       -emit-pch -o ${CMAKE_CURRENT_BINARY_DIR}/opencl${version}-c.pch
+       < ${OPENCL_C_H}
+-    DEPENDS clang ${OPENCL_C_H} ${clang_resource_headers_gen}
++    DEPENDS ${_comgr_pch_clang_dep} ${OPENCL_C_H} ${clang_resource_headers_gen}
+     COMMENT "Generating opencl${version}-c.pch")
+ 
+   add_custom_target(opencl${version}-c.pch_target ALL
+     DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/opencl${version}-c.pch)

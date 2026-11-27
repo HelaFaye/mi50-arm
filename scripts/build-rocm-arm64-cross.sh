@@ -27,8 +27,9 @@ HOST_ROCM="$WORK_ROOT/host-rocm"
 HOST_LLVM="$HOST_ROCM/llvm"
 HOST_VENV="$WORK_ROOT/host-venv"
 TARGET_ROCM="$WORK_ROOT/target-rocm"
+TARGET_LLVM="$TARGET_ROCM/llvm"
 DOWNLOADS="$WORK_ROOT/downloads"
-STAGES=(preflight sysroot toolchain host_venv fetch rocm_cmake host_llvm device_libs rocr rocminfo verify)
+STAGES=(preflight sysroot toolchain host_venv fetch rocm_cmake host_llvm device_libs target_llvm comgr hipcc rocr rocminfo verify)
 STAGING_SYSROOT=""
 
 log() { printf '\n[mi50-cross] %s\n' "$*"; }
@@ -489,6 +490,7 @@ stage_fetch() {
   apply_patch_idempotent "$SRC/rocminfo" "$REPO_ROOT/patches/0001-rocminfo-cross-system-processor.patch"
   apply_patch_idempotent "$SRC/ROCR-Runtime" "$REPO_ROOT/patches/0002-rocr-runtime-aarch64-intrinsics.patch"
   apply_patch_idempotent "$SRC/llvm-project" "$REPO_ROOT/patches/0003-device-libs-cmake4-cmp0053.patch"
+  apply_patch_idempotent "$SRC/llvm-project" "$REPO_ROOT/patches/0004-comgr-cross-host-tools.patch"
 }
 
 stage_rocm_cmake() {
@@ -561,6 +563,131 @@ stage_device_libs() {
   cmake --install "$BLD/device-libs"
 }
 
+stage_target_llvm() {
+  log "Cross-building target ARM64 ROCm LLVM/Clang/LLD (AArch64;AMDGPU, LLVM_JOBS=$LLVM_JOBS, LINK_JOBS=$LINK_JOBS)"
+  [ -f "$TOOLCHAIN_DIR/aarch64-noble-toolchain.cmake" ] || die "Run toolchain stage first"
+  [ -d "$SRC/llvm-project/.git" ] || die "Run fetch stage first"
+  [ -x "$HOST_LLVM/bin/llvm-tblgen" ] || die "Run host_llvm stage first"
+  [ -x "$HOST_LLVM/bin/clang-tblgen" ] || die "Run host_llvm stage first"
+  local t
+  cmake -S "$SRC/llvm-project/llvm" -B "$BLD/target-llvm" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_DIR/aarch64-noble-toolchain.cmake" \
+    -DCMAKE_INSTALL_PREFIX="$TARGET_LLVM" \
+    -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib' \
+    -DLLVM_HOST_TRIPLE=aarch64-unknown-linux-gnu \
+    -DLLVM_DEFAULT_TARGET_TRIPLE=aarch64-unknown-linux-gnu \
+    -DLLVM_TARGETS_TO_BUILD="AArch64;AMDGPU" \
+    -DLLVM_ENABLE_PROJECTS="clang;lld" \
+    -DLLVM_NATIVE_TOOL_DIR="$HOST_LLVM/bin" \
+    -DLLVM_TABLEGEN="$HOST_LLVM/bin/llvm-tblgen" \
+    -DCLANG_TABLEGEN="$HOST_LLVM/bin/clang-tblgen" \
+    -DLLVM_ENABLE_ASSERTIONS=OFF \
+    -DLLVM_INCLUDE_TESTS=OFF \
+    -DLLVM_INCLUDE_BENCHMARKS=OFF \
+    -DLLVM_INCLUDE_EXAMPLES=OFF \
+    -DLLVM_INCLUDE_DOCS=OFF \
+    -DLLVM_BUILD_DOCS=OFF \
+    -DLLVM_ENABLE_TERMINFO=OFF \
+    -DLLVM_ENABLE_LIBXML2=OFF \
+    -DLLVM_ENABLE_LIBEDIT=OFF \
+    -DLLVM_ENABLE_ZLIB=ON \
+    -DLLVM_ENABLE_ZSTD=ON \
+    -DLLVM_PARALLEL_LINK_JOBS="$LINK_JOBS"
+  cmake --build "$BLD/target-llvm" --parallel "$LLVM_JOBS"
+  cmake --install "$BLD/target-llvm"
+  mkdir -p "$TARGET_ROCM/bin" "$TARGET_ROCM/lib"
+  ln -sfn ../llvm "$TARGET_ROCM/lib/llvm"
+  for t in clang clang++; do
+    ln -sf "$t" "$TARGET_LLVM/bin/amd$t"
+    ln -sf "$TARGET_LLVM/bin/$t" "$TARGET_ROCM/bin/amd$t"
+  done
+}
+
+stage_comgr() {
+  log "Cross-building amd_comgr"
+  [ -f "$TOOLCHAIN_DIR/aarch64-noble-toolchain.cmake" ] || die "Run toolchain stage first"
+  [ -d "$SRC/llvm-project/.git" ] || die "Run fetch stage first"
+  [ -x "$HOST_LLVM/bin/clang" ] || die "Run host_llvm stage first"
+  [ -f "$TARGET_ROCM/lib/cmake/AMDDeviceLibs/AMDDeviceLibsConfig.cmake" ] || die "Run device_libs stage first"
+  [ -f "$TARGET_LLVM/lib/cmake/llvm/LLVMConfig.cmake" ] || die "Run target_llvm stage first"
+  [ -f "$TARGET_LLVM/lib/cmake/clang/ClangConfig.cmake" ] || die "Run target_llvm stage first"
+  [ -f "$TARGET_LLVM/lib/cmake/lld/LLDConfig.cmake" ] || die "Run target_llvm stage first"
+  apply_patch_idempotent "$SRC/llvm-project" "$REPO_ROOT/patches/0004-comgr-cross-host-tools.patch"
+
+  local host_cc
+  host_cc=$(command -v clang || command -v gcc)
+  mkdir -p "$BLD/comgr-host"
+  cat > "$BLD/comgr-host/bc2h.c" <<'BC2H_EOF'
+#include <stdio.h>
+int main(int argc, char **argv){
+    FILE *ifp, *ofp;
+    int c, i, l;
+    if (argc != 4) return 1;
+    ifp = fopen(argv[1], "rb");
+    if (!ifp) return 1;
+    i = fseek(ifp, 0, SEEK_END);
+    if (i < 0) return 1;
+    l = ftell(ifp);
+    if (l < 0) return 1;
+    i = fseek(ifp, 0, SEEK_SET);
+    if (i < 0) return 1;
+    ofp = fopen(argv[2], "wb+");
+    if (!ofp) return 1;
+    fprintf(ofp, "#define %s_size %d\n\n"
+                 "#if defined __GNUC__\n"
+                 "__attribute__((aligned (4096)))\n"
+                 "#elif defined _MSC_VER\n"
+                 "__declspec(align(4096))\n"
+                 "#endif\n"
+                 "static const unsigned char %s[%s_size+1] = {",
+                 argv[3], l,
+                 argv[3], argv[3]);
+    i = 0;
+    while ((c = getc(ifp)) != EOF) {
+        if (0 == (i&7)) fprintf(ofp, "\n   ");
+        fprintf(ofp, " 0x%02x,", c);
+        ++i;
+    }
+    fprintf(ofp, " 0x00\n};\n\n");
+    fclose(ifp);
+    fclose(ofp);
+    return 0;
+}
+BC2H_EOF
+  "$host_cc" -O2 "$BLD/comgr-host/bc2h.c" -o "$BLD/comgr-host/bc2h"
+
+  cmake -S "$SRC/llvm-project/amd/comgr" -B "$BLD/comgr" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_DIR/aarch64-noble-toolchain.cmake" \
+    -DCMAKE_INSTALL_PREFIX="$TARGET_ROCM" \
+    -DCMAKE_INSTALL_RPATH=/opt/rocm/lib \
+    -DCMAKE_PREFIX_PATH="$TARGET_LLVM;$TARGET_ROCM" \
+    -DLLVM_DIR="$TARGET_LLVM/lib/cmake/llvm" \
+    -DClang_DIR="$TARGET_LLVM/lib/cmake/clang" \
+    -DLLD_DIR="$TARGET_LLVM/lib/cmake/lld" \
+    -DAMDDeviceLibs_DIR="$TARGET_ROCM/lib/cmake/AMDDeviceLibs" \
+    -DCOMGR_HOST_BC2H="$BLD/comgr-host/bc2h" \
+    -DCOMGR_HOST_CLANG="$HOST_LLVM/bin/clang" \
+    -DBUILD_TESTING=OFF
+  cmake --build "$BLD/comgr" --parallel "$JOBS"
+  cmake --install "$BLD/comgr"
+}
+
+stage_hipcc() {
+  log "Cross-building hipcc"
+  [ -f "$TOOLCHAIN_DIR/aarch64-noble-toolchain.cmake" ] || die "Run toolchain stage first"
+  [ -d "$SRC/llvm-project/.git" ] || die "Run fetch stage first"
+  cmake -S "$SRC/llvm-project/amd/hipcc" -B "$BLD/hipcc" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_DIR/aarch64-noble-toolchain.cmake" \
+    -DCMAKE_INSTALL_PREFIX="$TARGET_ROCM" \
+    -DCMAKE_INSTALL_RPATH=/opt/rocm/lib \
+    -DROCM_DIR="$TARGET_ROCM/share/rocm/cmake"
+  cmake --build "$BLD/hipcc" --parallel "$JOBS"
+  cmake --install "$BLD/hipcc"
+}
+
 stage_rocr() {
   log "Cross-building ROCR Runtime"
   [ -f "$TOOLCHAIN_DIR/aarch64-noble-toolchain.cmake" ] || die "Run toolchain stage first"
@@ -620,8 +747,8 @@ def inside(path):
 def version_tuple(value):
     return tuple(int(part) for part in value.split('.'))
 
-def resolve(soname):
-    for directory in search:
+def resolve(soname, rpath_dirs=()):
+    for directory in (*rpath_dirs, *search):
         candidate = os.path.join(directory, soname)
         if not os.path.lexists(candidate):
             continue
@@ -649,15 +776,28 @@ def check_one(path, seen, allow_entry=False):
                 if found > ceiling:
                     raise RuntimeError(f'{path}: {namespace}_{match.group(1)} exceeds Noble ceiling {ceiling}')
     dynamic = readelf('-d', path)
+    origin = os.path.dirname(path)
+    rpath_dirs = []
     for line in dynamic.splitlines():
         if '(RPATH)' in line or '(RUNPATH)' in line:
             match = re.search(r'\[(.*?)\]', line)
-            if match and any(bad in match.group(1) for bad in ('/home/', '/run/media/', '/usr/lib/x86_64')):
-                raise RuntimeError(f'{path}: build-host path leaked into {line.strip()}')
+            if match:
+                val = match.group(1)
+                if any(bad in val for bad in ('/home/', '/run/media/', '/usr/lib/x86_64')):
+                    raise RuntimeError(f'{path}: build-host path leaked into {line.strip()}')
+                for entry in val.split(':'):
+                    if not entry:
+                        continue
+                    expanded = entry.replace('${ORIGIN}', origin).replace('$ORIGIN', origin)
+                    if os.path.isabs(expanded):
+                        real_dir = os.path.realpath(expanded)
+                        if inside(real_dir) and os.path.isdir(real_dir):
+                            rpath_dirs.append(real_dir)
+    for line in dynamic.splitlines():
         if '(NEEDED)' in line:
             match = re.search(r'Shared library: \[([^]]+)\]', line)
             if match:
-                dep = resolve(match.group(1))
+                dep = resolve(match.group(1), rpath_dirs)
                 if dep is None:
                     raise RuntimeError(f'{path}: DT_NEEDED {match.group(1)} not found inside target/sysroot roots')
                 if dep not in seen:
@@ -742,6 +882,9 @@ run_stage() {
     rocm_cmake) stage_rocm_cmake ;;
     host_llvm) stage_host_llvm ;;
     device_libs) stage_device_libs ;;
+    target_llvm) stage_target_llvm ;;
+    comgr) stage_comgr ;;
+    hipcc) stage_hipcc ;;
     rocr) stage_rocr ;;
     rocminfo) stage_rocminfo ;;
     verify) stage_verify ;;
