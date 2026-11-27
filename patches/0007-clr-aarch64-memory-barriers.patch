@@ -1,0 +1,50 @@
+diff --git a/hipamd/src/hip_graph_internal.cpp b/hipamd/src/hip_graph_internal.cpp
+--- a/hipamd/src/hip_graph_internal.cpp
++++ b/hipamd/src/hip_graph_internal.cpp
+@@ -979,9 +979,21 @@
+       address dev_ptr =
+           kernarg_graph_.back().kernarg_pool_addr_ + kernarg_graph_.back().kernarg_pool_size_;
+       auto kSentinel = *reinterpret_cast<volatile unsigned char*>(dev_ptr - 1);
++      #if defined(__x86_64__) || defined(_M_X64)
+       _mm_sfence();
++      #elif defined(__aarch64__) || defined(_M_ARM64)
++      asm volatile("dsb st" ::: "memory");
++      #elif defined(__ppc__) || defined(__powerpc__) || defined(__powerpc64__)
++      asm volatile("eieio" ::: "memory");
++      #endif
+       *(dev_ptr - 1) = kSentinel;
++      #if defined(__x86_64__) || defined(_M_X64)
+       _mm_mfence();
++      #elif defined(__aarch64__) || defined(_M_ARM64)
++      asm volatile("dsb sy" ::: "memory");
++      #elif defined(__ppc__) || defined(__powerpc__) || defined(__powerpc64__)
++      asm volatile("sync" ::: "memory");
++      #endif
+       kSentinel = *reinterpret_cast<volatile unsigned char*>(dev_ptr - 1);
+     }
+   }
+diff --git a/rocclr/device/rocm/rocvirtual.cpp b/rocclr/device/rocm/rocvirtual.cpp
+--- a/rocclr/device/rocm/rocvirtual.cpp
++++ b/rocclr/device/rocm/rocvirtual.cpp
+@@ -3282,9 +3282,21 @@
+           auto kSentinel = *reinterpret_cast<volatile int*>(dev().info().hdpMemFlushCntl);
+         } else if (kernArgImpl == KernelArgImpl::DeviceKernelArgsReadback &&
+                    argSize != 0) {
++          #if defined(__x86_64__) || defined(_M_X64)
+           _mm_sfence();
++          #elif defined(__aarch64__) || defined(_M_ARM64)
++          asm volatile("dsb st" ::: "memory");
++          #elif defined(__ppc__) || defined(__powerpc__) || defined(__powerpc64__)
++          asm volatile("eieio" ::: "memory");
++          #endif
+           *(argBuffer + argSize - 1) = *(parameters + argSize - 1);
++          #if defined(__x86_64__) || defined(_M_X64)
+           _mm_mfence();
++          #elif defined(__aarch64__) || defined(_M_ARM64)
++          asm volatile("dsb sy" ::: "memory");
++          #elif defined(__ppc__) || defined(__powerpc__) || defined(__powerpc64__)
++          asm volatile("sync" ::: "memory");
++          #endif
+           auto kSentinel = *reinterpret_cast<volatile unsigned char*>(
+               argBuffer + argSize - 1);
+         }

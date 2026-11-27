@@ -8,6 +8,8 @@ PATCH = (ROOT / "patches/0001-rocminfo-cross-system-processor.patch").read_text(
 ROCR_PATCH = (ROOT / "patches/0002-rocr-runtime-aarch64-intrinsics.patch").read_text()
 DEVICELIBS_PATCH = (ROOT / "patches/0003-device-libs-cmake4-cmp0053.patch").read_text()
 COMGR_PATCH = (ROOT / "patches/0004-comgr-cross-host-tools.patch").read_text()
+CLR_PATCH = (ROOT / "patches/0005-clr-cross-host-tools-and-hip-config.patch").read_text()
+HIP_LANG_PATCH = (ROOT / "patches/0006-hip-lang-config-cross-target.patch").read_text()
 GITIGNORE = (ROOT / ".gitignore").read_text().splitlines()
 
 checks = {
@@ -88,6 +90,18 @@ checks = {
         and "COMGR_HOST_BC2H" in COMGR_PATCH
         and "COMGR_HOST_CLANG" in COMGR_PATCH
         and "stage_hipcc" in SCRIPT
+    ),
+    "Milestone 4 overlays GL/EGL/X11 dev headers, builds ARM64 compiler-rt builtins, and cross-builds clr/HIP": (
+        "libgl-dev" in SCRIPT and "libegl-dev" in SCRIPT and "libx11-dev" in SCRIPT
+        and "stage_compiler_rt" in SCRIPT
+        and "libclang_rt.builtins-aarch64.a" in SCRIPT
+        and "stage_hip" in SCRIPT
+        and "HIPRTC_MC_TRIPLE=aarch64-linux-gnu" in SCRIPT
+        and "0005-clr-cross-host-tools-and-hip-config.patch" in SCRIPT
+        and "0006-hip-lang-config-cross-target.patch" in SCRIPT
+        and "CMAKE_CXX_COMPILER_TARGET" in CLR_PATCH
+        and "HIPRTC_MC_TRIPLE" in CLR_PATCH
+        and "CMAKE_HIP_COMPILER_TARGET" in HIP_LANG_PATCH
     ),
     "QEMU accepts only HSA success, absent-KFD diagnostics, or verified unemulated KFD ioctl": (
         "Unable to open /dev/kfd read-write:" in SCRIPT

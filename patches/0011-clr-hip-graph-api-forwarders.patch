@@ -1,0 +1,92 @@
+diff --git a/hipamd/src/hip_hcc.map.in b/hipamd/src/hip_hcc.map.in
+index 31ab71a..5f26350 100644
+--- a/hipamd/src/hip_hcc.map.in
++++ b/hipamd/src/hip_hcc.map.in
+@@ -272,9 +272,9 @@ global:
+     hipMemcpyAtoH;
+     hipMemcpyHtoA;
+     hipMemcpyParam2DAsync;
+-    __hipGetPCH;
+     hipExtStreamGetCUMask;
+     extern "C++" {
++      __hipGetPCH*;
+     hipCreateSurfaceObject*;
+     hipDestroySurfaceObject*;
+     hipHccModuleLaunchKernel*;
+diff --git a/hipamd/src/hip_table_interface.cpp b/hipamd/src/hip_table_interface.cpp
+index d5273c1..eeb7e90 100644
+--- a/hipamd/src/hip_table_interface.cpp
++++ b/hipamd/src/hip_table_interface.cpp
+@@ -488,6 +488,40 @@ hipError_t hipGraphAddEventWaitNode(hipGraphNode_t* pGraphNode, hipGraph_t graph
+   return hip::GetHipDispatchTable()->hipGraphAddEventWaitNode_fn(pGraphNode, graph, pDependencies,
+                                                                  numDependencies, event);
+ }
++hipError_t hipGraphAddExternalSemaphoresSignalNode(
++    hipGraphNode_t* pGraphNode, hipGraph_t graph,
++    const hipGraphNode_t* pDependencies, size_t numDependencies,
++    const hipExternalSemaphoreSignalNodeParams* nodeParams) {
++  return hip::GetHipDispatchTable()->hipGraphAddExternalSemaphoresSignalNode_fn(
++      pGraphNode, graph, pDependencies, numDependencies, nodeParams);
++}
++hipError_t hipGraphAddExternalSemaphoresWaitNode(
++    hipGraphNode_t* pGraphNode, hipGraph_t graph,
++    const hipGraphNode_t* pDependencies, size_t numDependencies,
++    const hipExternalSemaphoreWaitNodeParams* nodeParams) {
++  return hip::GetHipDispatchTable()->hipGraphAddExternalSemaphoresWaitNode_fn(
++      pGraphNode, graph, pDependencies, numDependencies, nodeParams);
++}
++hipError_t hipGraphExternalSemaphoresSignalNodeSetParams(
++    hipGraphNode_t hNode, const hipExternalSemaphoreSignalNodeParams* nodeParams) {
++  return hip::GetHipDispatchTable()->hipGraphExternalSemaphoresSignalNodeSetParams_fn(
++      hNode, nodeParams);
++}
++hipError_t hipGraphExternalSemaphoresSignalNodeGetParams(
++    hipGraphNode_t hNode, hipExternalSemaphoreSignalNodeParams* params_out) {
++  return hip::GetHipDispatchTable()->hipGraphExternalSemaphoresSignalNodeGetParams_fn(
++      hNode, params_out);
++}
++hipError_t hipGraphExternalSemaphoresWaitNodeSetParams(
++    hipGraphNode_t hNode, const hipExternalSemaphoreWaitNodeParams* nodeParams) {
++  return hip::GetHipDispatchTable()->hipGraphExternalSemaphoresWaitNodeSetParams_fn(
++      hNode, nodeParams);
++}
++hipError_t hipGraphExternalSemaphoresWaitNodeGetParams(
++    hipGraphNode_t hNode, hipExternalSemaphoreWaitNodeParams* params_out) {
++  return hip::GetHipDispatchTable()->hipGraphExternalSemaphoresWaitNodeGetParams_fn(
++      hNode, params_out);
++}
+ hipError_t hipGraphAddHostNode(hipGraphNode_t* pGraphNode, hipGraph_t graph,
+                                const hipGraphNode_t* pDependencies, size_t numDependencies,
+                                const hipHostNodeParams* pNodeParams) {
+@@ -603,6 +637,21 @@ hipError_t hipGraphExecEventWaitNodeSetEvent(hipGraphExec_t hGraphExec, hipGraph
+                                              hipEvent_t event) {
+   return hip::GetHipDispatchTable()->hipGraphExecEventWaitNodeSetEvent_fn(hGraphExec, hNode, event);
+ }
++hipError_t hipGraphExecExternalSemaphoresSignalNodeSetParams(
++    hipGraphExec_t hGraphExec, hipGraphNode_t hNode,
++    const hipExternalSemaphoreSignalNodeParams* nodeParams) {
++  return hip::GetHipDispatchTable()->hipGraphExecExternalSemaphoresSignalNodeSetParams_fn(
++      hGraphExec, hNode, nodeParams);
++}
++hipError_t hipGraphExecExternalSemaphoresWaitNodeSetParams(
++    hipGraphExec_t hGraphExec, hipGraphNode_t hNode,
++    const hipExternalSemaphoreWaitNodeParams* nodeParams) {
++  return hip::GetHipDispatchTable()->hipGraphExecExternalSemaphoresWaitNodeSetParams_fn(
++      hGraphExec, hNode, nodeParams);
++}
++hipError_t hipGraphExecGetFlags(hipGraphExec_t graphExec, unsigned long long* flags) {
++  return hip::GetHipDispatchTable()->hipGraphExecGetFlags_fn(graphExec, flags);
++}
+ hipError_t hipGraphExecHostNodeSetParams(hipGraphExec_t hGraphExec, hipGraphNode_t node,
+                                          const hipHostNodeParams* pNodeParams) {
+   return hip::GetHipDispatchTable()->hipGraphExecHostNodeSetParams_fn(hGraphExec, node,
+@@ -758,6 +807,9 @@ hipError_t hipGraphNodeSetEnabled(hipGraphExec_t hGraphExec, hipGraphNode_t hNod
+                                   unsigned int isEnabled) {
+   return hip::GetHipDispatchTable()->hipGraphNodeSetEnabled_fn(hGraphExec, hNode, isEnabled);
+ }
++hipError_t hipGraphNodeSetParams(hipGraphNode_t node, hipGraphNodeParams* nodeParams) {
++  return hip::GetHipDispatchTable()->hipGraphNodeSetParams_fn(node, nodeParams);
++}
+ hipError_t hipGraphReleaseUserObject(hipGraph_t graph, hipUserObject_t object, unsigned int count) {
+   return hip::GetHipDispatchTable()->hipGraphReleaseUserObject_fn(graph, object, count);
+ }

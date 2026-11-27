@@ -1,0 +1,41 @@
+diff --git a/hipamd/hip-config-amd.cmake.in b/hipamd/hip-config-amd.cmake.in
+index 1111111..2222222 100755
+--- a/hipamd/hip-config-amd.cmake.in
++++ b/hipamd/hip-config-amd.cmake.in
+@@ -174,11 +174,16 @@ if(HIP_CLANG_NUM_PARALLEL_JOBS GREATER 1)
+   endif()
+ endif()
+ 
++set(_HIP_CLANGRT_TARGET_OPT "")
++if(CMAKE_CXX_COMPILER_TARGET)
++  set(_HIP_CLANGRT_TARGET_OPT "--target=${CMAKE_CXX_COMPILER_TARGET}")
++endif()
++
+ # Use HIP_CXX option -print-libgcc-file-name --rtlib=compiler-rt
+ # To fetch the compiler rt library file name.
+ execute_process(
+   COMMAND ${CMAKE_COMMAND} -E env HIPCC_VERBOSE=0
+-  ${HIP_CXX_COMPILER} -print-libgcc-file-name --rtlib=compiler-rt
++  ${HIP_CXX_COMPILER} ${_HIP_CLANGRT_TARGET_OPT} -print-libgcc-file-name --rtlib=compiler-rt
+   OUTPUT_VARIABLE CLANGRT_BUILTINS
+   ERROR_VARIABLE  CLANGRT_Error
+   OUTPUT_STRIP_TRAILING_WHITESPACE
+diff --git a/hipamd/src/hiprtc/CMakeLists.txt b/hipamd/src/hiprtc/CMakeLists.txt
+index 1111111..2222222 100644
+--- a/hipamd/src/hiprtc/CMakeLists.txt
++++ b/hipamd/src/hiprtc/CMakeLists.txt
+@@ -182,9 +182,13 @@ add_custom_command(
+   COMMAND $<TARGET_FILE:clang> -O3 --rocm-path=${PROJECT_SOURCE_DIR}/include/.. -std=c++17 -nogpulib --hip-version=${HIP_LIB_VERSION_MAJOR}.${HIP_LIB_VERSION_MINOR} -isystem ${HIP_COMMON_INCLUDE_DIR} -isystem ${PROJECT_SOURCE_DIR}/include -isystem ${PROJECT_BINARY_DIR}/include -isystem ${CMAKE_CURRENT_SOURCE_DIR}/include --cuda-device-only -D__HIPCC_RTC__ -DHIP_VERSION_MAJOR=${HIP_LIB_VERSION_MAJOR} -DHIP_VERSION_MINOR=${HIP_LIB_VERSION_MINOR} -x hip ${HIPRTC_GEN_HEADER} -E -P -o ${HIPRTC_GEN_PREPROCESSED}
+   COMMAND ${CMAKE_COMMAND} -DHIPRTC_ADD_MACROS=1 -DHIPRTC_HEADERS="${HIPRTC_HEADERS}" -DHIPRTC_PREPROCESSED_FILE=${HIPRTC_GEN_PREPROCESSED} -P ${HIPRTC_CMAKE}
+   DEPENDS clang ${HIPRTC_GEN_HEADER})
++set(_HIPRTC_MC_TRIPLE_ARG "")
++if(DEFINED HIPRTC_MC_TRIPLE AND NOT "${HIPRTC_MC_TRIPLE}" STREQUAL "")
++  set(_HIPRTC_MC_TRIPLE_ARG "--triple=${HIPRTC_MC_TRIPLE}")
++endif()
+ add_custom_command(
+   OUTPUT ${HIPRTC_GEN_OBJ}
+-  COMMAND $<TARGET_FILE:llvm-mc> -o ${HIPRTC_GEN_OBJ} ${HIPRTC_GEN_MCIN} --filetype=obj
++  COMMAND $<TARGET_FILE:llvm-mc> ${_HIPRTC_MC_TRIPLE_ARG} -o ${HIPRTC_GEN_OBJ} ${HIPRTC_GEN_MCIN} --filetype=obj
+   DEPENDS llvm-mc ${HIPRTC_GEN_PREPROCESSED} ${HIPRTC_GEN_MCIN})
+ 
+ # Create hiprtc-builtins library.

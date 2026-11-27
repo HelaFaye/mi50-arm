@@ -29,7 +29,7 @@ HOST_VENV="$WORK_ROOT/host-venv"
 TARGET_ROCM="$WORK_ROOT/target-rocm"
 TARGET_LLVM="$TARGET_ROCM/llvm"
 DOWNLOADS="$WORK_ROOT/downloads"
-STAGES=(preflight sysroot toolchain host_venv fetch rocm_cmake host_llvm device_libs target_llvm comgr hipcc rocr rocminfo verify)
+STAGES=(preflight sysroot gl_dev_overlay toolchain host_venv fetch rocm_cmake host_llvm device_libs target_llvm comgr hipcc rocr rocminfo compiler_rt hip verify)
 STAGING_SYSROOT=""
 
 log() { printf '\n[mi50-cross] %s\n' "$*"; }
@@ -319,6 +319,1135 @@ stage_sysroot() {
   log "Sysroot ready: $SYSROOT"
 }
 
+stage_gl_dev_overlay() {
+  log "Installing version-matched OpenGL development files into Noble sysroot"
+  ensure_work_root_safe
+  verify_sysroot_contents "$SYSROOT"
+
+  python3 - "$SYSROOT" "$DOWNLOADS/noble-arm64-debs" <<'PY_GL'
+from __future__ import annotations
+
+import hashlib
+import json
+import lzma
+import os
+import re
+from pathlib import Path, PurePosixPath
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+
+import io
+import tarfile
+
+sysroot = Path(sys.argv[1]).absolute()
+deb_cache = Path(sys.argv[2]).absolute()
+deb_cache.mkdir(parents=True, exist_ok=True)
+
+PPA_INDEX = sysroot / "var/lib/apt/lists/ppa.launchpadcontent.net_ernstp_mesarc_ubuntu_dists_noble_main_binary-arm64_Packages"
+NOBLE_INDEX = deb_cache / "noble-main-arm64-Packages.xz"
+NOBLE_UPDATES_INDEX = deb_cache / "noble-updates-main-arm64-Packages.xz"
+PPA_BASE = "https://ppa.launchpadcontent.net/ernstp/mesarc/ubuntu/"
+UBUNTU_BASE = "https://ports.ubuntu.com/ubuntu-ports/"
+PPA_VERSION = "1.7.0+git2603191621.c046a76~n~mesarc0"
+X11_BASE_VERSION = "2:1.8.7-1build1"
+X11_UPDATES_VERSION = "2:1.8.7-1ubuntu0.1"
+
+# Package, origin, pinned version, pinned SHA256, permitted architectures.
+PACKAGES = [
+    ("libgl-dev", "ppa", PPA_VERSION, "1b09bc3142ca54f8e888f6f499c4df58a3ab327345b806d872d029d887602362", {"arm64"}),
+    ("libglx-dev", "ppa", PPA_VERSION, "46ef0b1352c922dd9e4e9aea5e023c2cf0d44233b796c5d3e3e045d19634dadc", {"arm64"}),
+    ("libopengl-dev", "ppa", PPA_VERSION, "286857fb15fda78f1917271f416013b500cbac18cc65770bfe40c2db07b4d66d", {"arm64"}),
+    ("libegl-dev", "ppa", PPA_VERSION, "f0b89ca01bdf15090fc2ae6d90998e181b0e469e47454b16dcd7f183b544be04", {"arm64"}),
+    ("libx11-dev", "noble-updates", X11_UPDATES_VERSION, "c67aedaed249c629628c24e717c5b550a066e246c678aa98098002ed0a8017e9", {"arm64"}),
+    ("libxau-dev", "noble", "1:1.0.9-1build6", "246ffb5b49c3d26b243fe4ce18777815484112c64f167ef37cf48b805a6a4ca2", {"arm64"}),
+    ("libxdmcp-dev", "noble", "1:1.1.3-0ubuntu6", "dcbc325116fd8c91188a7dc7118dbfe8948ef349f337fbcc1a57e97d42139ac5", {"arm64"}),
+    ("libxcb1-dev", "noble", "1.15-1ubuntu2", "10f2f12652c1825df1158c80ce3715c2cf48eddb0d3a102191b0c5974a15bc1d", {"arm64"}),
+    ("libpthread-stubs0-dev", "noble", "0.4-1build3", "c96f81b92c2ae0a40513b57df70926746165c600aaa65ae4754a0af246b52567", {"arm64"}),
+    ("x11proto-dev", "noble", "2023.2-1", "3bf13a2ffb79ecd4014d438936014e5863f79eb59ebf76e8f43356271c90e7ce", {"all", "arm64"}),
+    ("x11proto-core-dev", "noble", "2023.2-1", "d7c8cbeb485a45ca6e5486b46df7a5ead737440954ae4489866222101ac2f0d7", {"all", "arm64"}),
+    ("xtrans-dev", "noble", "1.4.0-1", "45277c51d5d83db351b61859314b59595c9626ac372fbb2fc0d5542e169d9086", {"all", "arm64"}),
+    ("xorg-sgml-doctools", "noble", "1:1.11-1.1", "277f662c6d94606c22078f2af82ac1b6e01386d5a4dec6ca7487bca4c5b23c07", {"all", "arm64"}),
+]
+
+# These runtime packages are already installed in the sysroot and must not be
+# replaced by the development overlay. Their exact versions prove provenance.
+RUNTIME_VERSIONS = {
+    "libgl1": PPA_VERSION,
+    "libglx0": PPA_VERSION,
+    "libopengl0": PPA_VERSION,
+    "libglvnd0": PPA_VERSION,
+    "libegl1": PPA_VERSION,
+    "libx11-6": X11_UPDATES_VERSION,
+    "libxau6": "1:1.0.9-1build6",
+    "libxdmcp6": "1:1.1.3-0ubuntu6",
+    "libxcb1": "1.15-1ubuntu2",
+}
+
+MARKER = sysroot / ".mi50-gl-dev-overlay.json"
+REQUIRED = [
+    "usr/include/GL/gl.h",
+    "usr/include/GL/glext.h",
+    "usr/include/GL/glx.h",
+    "usr/include/GL/glxext.h",
+    "usr/include/EGL/egl.h",
+    "usr/include/EGL/eglext.h",
+    "usr/include/EGL/eglplatform.h",
+    "usr/include/X11/Xlib.h",
+    "usr/include/X11/Xutil.h",
+    "usr/include/xcb/xcb.h",
+    "usr/lib/aarch64-linux-gnu/libGL.so",
+    "usr/lib/aarch64-linux-gnu/libGLX.so",
+    "usr/lib/aarch64-linux-gnu/libOpenGL.so",
+    "usr/lib/aarch64-linux-gnu/libEGL.so",
+]
+
+
+def parse_index(path: Path, compressed: bool) -> dict[str, dict[str, str]]:
+    if not path.is_file():
+        raise SystemExit(f"Required cached package index is missing: {path}")
+    if compressed:
+        with lzma.open(path, "rt", errors="replace") as stream:
+            raw = stream.read()
+    else:
+        raw = path.read_text(errors="replace")
+    result: dict[str, dict[str, str]] = {}
+    for paragraph in raw.strip().split("\n\n"):
+        fields: dict[str, str] = {}
+        current = None
+        for line in paragraph.splitlines():
+            if line.startswith((" ", "\t")) and current:
+                fields[current] += " " + line.strip()
+            elif ": " in line:
+                key, value = line.split(": ", 1)
+                fields[key] = value
+                current = key
+        name = fields.get("Package")
+        if name:
+            result[name] = fields
+    return result
+
+
+def parse_status(path: Path) -> dict[str, dict[str, str]]:
+    if not path.is_file():
+        raise SystemExit(f"Sysroot dpkg status database is missing: {path}")
+    result = {}
+    for paragraph in path.read_text(errors="replace").split("\n\n"):
+        fields = {}
+        current = None
+        for line in paragraph.splitlines():
+            if line.startswith((" ", "\t")) and current:
+                fields[current] += " " + line.strip()
+            elif ": " in line:
+                key, value = line.split(": ", 1)
+                fields[key] = value
+                current = key
+        if fields.get("Package"):
+            result[fields["Package"]] = fields
+    return result
+
+
+
+def reconcile_libx11_runtime_metadata(updates_records, current_status):
+    """
+    Verify the exact Noble Updates libx11-6 package against the existing
+    sysroot, then reconcile only its verified dpkg metadata.
+
+    No runtime data payload is installed or replaced here.
+    """
+    package = "libx11-6"
+    expected_archive_sha256 = (
+        "57f0bee78ea23caa31520a565fb12fcbea1ee5ecfd4f2055f12dd0ac3698f439"
+    )
+    expected_old_md5sums_sha256 = (
+        "91829f6a89670eaee581a594f0f796c4c87f24ccb58c43f842b1462545cfa9cc"
+    )
+    expected_new_md5sums_sha256 = (
+        "e733ad656f12dbe25ee0f399b1e9489d8da004f253bd25a6aac34189023366bf"
+    )
+    old_version = X11_BASE_VERSION
+    new_version = X11_UPDATES_VERSION
+    old_installed_size = "1453"
+    new_installed_size = "1454"
+
+    def fail(message):
+        raise SystemExit(f"X11 runtime metadata reconciliation: {message}")
+
+    def digest(data):
+        return hashlib.sha256(data).hexdigest()
+
+    def parse_fields(text):
+        fields = {}
+        current = None
+        for line in text.splitlines():
+            if line.startswith((" ", "\t")) and current:
+                fields[current] += " " + line.strip()
+            elif ": " in line:
+                key, value = line.split(": ", 1)
+                fields[key] = value
+                current = key
+        return fields
+
+    def safe_archive_name(raw):
+        path = PurePosixPath(raw)
+        if path.is_absolute() or ".." in path.parts:
+            fail(f"unsafe path in package archive: {raw!r}")
+        parts = tuple(
+            part for part in path.parts if part not in ("", ".", "/")
+        )
+        return "/".join(parts) if parts else None
+
+    def read_tar_entries(blob, label):
+        entries = {}
+        try:
+            with tarfile.open(fileobj=io.BytesIO(blob), mode="r:*") as archive:
+                for member in archive.getmembers():
+                    name = safe_archive_name(member.name)
+                    if name is None:
+                        continue
+                    if name in entries:
+                        fail(f"duplicate path in {label}: {name}")
+
+                    if member.isfile():
+                        entries[name] = (
+                            "file",
+                            archive.extractfile(member).read(),
+                        )
+                    elif member.isdir():
+                        entries[name] = ("directory", None)
+                    elif member.issym():
+                        entries[name] = ("symlink", member.linkname)
+                    else:
+                        fail(
+                            f"unsupported special entry in {label}: "
+                            f"{name} ({member.type!r})"
+                        )
+        except (tarfile.TarError, OSError) as exc:
+            fail(f"cannot read {label}: {exc}")
+        return entries
+
+    def atomic_write(path, data):
+        temporary = path.with_name(
+            path.name + f".mi50-x11-{os.getpid()}.tmp"
+        )
+        if os.path.lexists(temporary):
+            fail(f"temporary path already exists: {temporary}")
+        if path.is_symlink() or not path.is_file():
+            fail(f"refusing to replace non-regular metadata file: {path}")
+
+        with temporary.open("xb") as stream:
+            stream.write(data)
+        os.chmod(temporary, path.stat().st_mode & 0o7777)
+        os.replace(temporary, path)
+
+    def preserve_backup(original, backup, expected_hash=None):
+        if os.path.lexists(backup):
+            if backup.is_symlink() or not backup.is_file():
+                fail(f"backup is not a regular file: {backup}")
+        else:
+            temporary = backup.with_name(
+                backup.name + f".mi50-x11-{os.getpid()}.tmp"
+            )
+            if os.path.lexists(temporary):
+                fail(f"backup temporary path already exists: {temporary}")
+            shutil.copy2(original, temporary)
+            if digest(temporary.read_bytes()) != digest(original.read_bytes()):
+                fail(f"backup copy verification failed: {backup}")
+            os.replace(temporary, backup)
+
+        actual = digest(backup.read_bytes())
+        if expected_hash is not None and actual != expected_hash:
+            fail(
+                f"backup hash mismatch for {backup}: "
+                f"expected {expected_hash}, got {actual}"
+            )
+        return actual
+
+    # The index record pins both package identity and archive provenance.
+    runtime_record = updates_records.get(package)
+    if not runtime_record:
+        fail("Noble Updates index has no libx11-6 record")
+    if runtime_record.get("Version") != new_version:
+        fail(
+            f"Updates index version mismatch: "
+            f"{runtime_record.get('Version')!r}"
+        )
+    if runtime_record.get("Architecture") != "arm64":
+        fail(
+            f"unexpected Updates runtime architecture: "
+            f"{runtime_record.get('Architecture')!r}"
+        )
+    if runtime_record.get("SHA256") != expected_archive_sha256:
+        fail("Noble Updates runtime index SHA256 does not match the pin")
+
+    filename = runtime_record.get("Filename", "")
+    archive_rel = PurePosixPath(filename)
+    if (
+        not filename
+        or archive_rel.is_absolute()
+        or ".." in archive_rel.parts
+    ):
+        fail(f"unsafe runtime package filename: {filename!r}")
+
+    runtime_deb = deb_cache / archive_rel.name
+    if (
+        not runtime_deb.is_file()
+        or digest(runtime_deb.read_bytes()) != expected_archive_sha256
+    ):
+        temporary = runtime_deb.with_suffix(
+            runtime_deb.suffix + ".runtime-part"
+        )
+        if os.path.lexists(temporary):
+            fail(f"runtime download temporary file already exists: {temporary}")
+
+        url = UBUNTU_BASE + filename
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "mi50-arm64-cross/1"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                with temporary.open("xb") as output:
+                    shutil.copyfileobj(response, output)
+
+            actual = digest(temporary.read_bytes())
+            if actual != expected_archive_sha256:
+                fail(
+                    f"downloaded runtime package SHA256 mismatch: "
+                    f"expected {expected_archive_sha256}, got {actual}"
+                )
+            os.replace(temporary, runtime_deb)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
+    if digest(runtime_deb.read_bytes()) != expected_archive_sha256:
+        fail("cached runtime package failed SHA256 verification")
+
+    ar_members = subprocess.check_output(
+        ["ar", "t", str(runtime_deb)], text=True
+    ).splitlines()
+    control_members = [
+        name for name in ar_members if name.startswith("control.tar")
+    ]
+    data_members = [
+        name for name in ar_members if name.startswith("data.tar")
+    ]
+    if len(control_members) != 1 or len(data_members) != 1:
+        fail(f"unexpected Debian archive members: {ar_members}")
+
+    control_blob = subprocess.check_output(
+        ["ar", "p", str(runtime_deb), control_members[0]]
+    )
+    data_blob = subprocess.check_output(
+        ["ar", "p", str(runtime_deb), data_members[0]]
+    )
+
+    control_entries = read_tar_entries(control_blob, "runtime control archive")
+    data_entries = read_tar_entries(data_blob, "runtime data archive")
+
+    if "control" not in control_entries:
+        fail("runtime package has no control file")
+    if control_entries["control"][0] != "file":
+        fail("runtime package control entry is not a regular file")
+
+    package_fields = parse_fields(control_entries["control"][1].decode())
+    if package_fields.get("Package") != package:
+        fail("runtime package control name mismatch")
+    if package_fields.get("Version") != new_version:
+        fail("runtime package control version mismatch")
+    if package_fields.get("Architecture") != "arm64":
+        fail("runtime package control architecture mismatch")
+    if package_fields.get("Installed-Size") != new_installed_size:
+        fail("runtime package Installed-Size differs from audited value")
+
+    # Verify that the package's complete data payload is already present.
+    # This is a comparison only; no runtime payload file is changed.
+    sysroot_real = sysroot.resolve()
+    for name, (kind, value) in data_entries.items():
+        target = sysroot.joinpath(*PurePosixPath(name).parts)
+        try:
+            parent_real = target.parent.resolve()
+        except OSError as exc:
+            fail(f"cannot resolve existing payload parent {name}: {exc}")
+
+        if not parent_real.is_relative_to(sysroot_real):
+            fail(f"runtime payload path escapes sysroot: {name}")
+
+        if kind == "directory":
+            if target.is_symlink() or not target.is_dir():
+                fail(f"runtime package directory differs from sysroot: {name}")
+        elif kind == "symlink":
+            if not target.is_symlink() or os.readlink(target) != value:
+                fail(f"runtime package symlink differs from sysroot: {name}")
+        elif kind == "file":
+            if target.is_symlink() or not target.is_file():
+                fail(f"runtime package file is missing or not regular: {name}")
+            if target.read_bytes() != value:
+                fail(f"runtime package file differs from sysroot: {name}")
+        else:
+            fail(f"unsupported runtime payload type for {name}")
+
+    # Cross-check the package file list, excluding dpkg's root entry ".".
+    info = sysroot / "var/lib/dpkg/info"
+    list_path = info / "libx11-6:arm64.list"
+    if list_path.is_symlink() or not list_path.is_file():
+        fail(f"installed package file list is missing or non-regular: {list_path}")
+
+    listed_paths = set()
+    for raw in list_path.read_text(errors="replace").splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        if raw.startswith("/"):
+            raw = raw[1:]
+        name = safe_archive_name(raw)
+        if name is not None:
+            listed_paths.add(name)
+
+    if listed_paths != set(data_entries):
+        fail(
+            "runtime package file list differs from package payload: "
+            f"only-in-list={sorted(listed_paths - set(data_entries))}, "
+            f"only-in-package={sorted(set(data_entries) - listed_paths)}"
+        )
+
+    # Verify the Updates md5sums file against the actual installed files.
+    if "md5sums" not in control_entries:
+        fail("Updates runtime package has no md5sums control file")
+    md5sums = control_entries["md5sums"][1]
+    if digest(md5sums) != expected_new_md5sums_sha256:
+        fail("Updates md5sums manifest SHA256 does not match the audited pin")
+
+    md5_count = 0
+    for line in md5sums.decode(errors="replace").splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            fail(f"malformed md5sums entry: {line!r}")
+        expected_md5, raw_name = parts
+        name = safe_archive_name(raw_name)
+        if name is None:
+            fail("empty path in md5sums manifest")
+        target = sysroot.joinpath(*PurePosixPath(name).parts)
+        if target.is_symlink() or not target.is_file():
+            fail(f"md5sums target is missing or non-regular: {name}")
+        actual_md5 = hashlib.md5(target.read_bytes()).hexdigest()
+        if actual_md5 != expected_md5:
+            fail(f"Updates md5sums verification failed for {name}")
+        md5_count += 1
+
+    if md5_count != 4:
+        fail(f"unexpected Updates md5sums entry count: {md5_count}")
+
+    # These package metadata files were already byte-identical in the audit.
+    for name in ("shlibs", "symbols", "triggers"):
+        if name not in control_entries:
+            fail(f"Updates runtime package is missing {name}")
+        metadata_path = info / f"libx11-6:arm64.{name}"
+        if metadata_path.is_symlink() or not metadata_path.is_file():
+            fail(f"installed dpkg metadata file is missing: {metadata_path}")
+        if metadata_path.read_bytes() != control_entries[name][1]:
+            fail(f"installed dpkg {name} differs from Updates package")
+
+    status_path = sysroot / "var/lib/dpkg/status"
+    if status_path.is_symlink() or not status_path.is_file():
+        fail(f"dpkg status is missing or non-regular: {status_path}")
+
+    current_record = current_status.get(package)
+    if not current_record:
+        fail("libx11-6 is absent from dpkg status")
+    if current_record.get("Status") != "install ok installed":
+        fail("libx11-6 is not marked install ok installed")
+    if current_record.get("Architecture") != "arm64":
+        fail("libx11-6 dpkg architecture is not arm64")
+
+    # The full control comparison previously found only Version and
+    # Installed-Size differences. Enforce that finding before editing.
+    for key, value in package_fields.items():
+        if key in ("Version", "Installed-Size"):
+            continue
+        if current_record.get(key) != value:
+            fail(
+                f"unexpected dpkg control-field mismatch for {key}: "
+                f"{current_record.get(key)!r} != {value!r}"
+            )
+
+    current_version = current_record.get("Version")
+    current_size = current_record.get("Installed-Size")
+    valid_states = {
+        old_version: old_installed_size,
+        new_version: new_installed_size,
+    }
+    if current_version not in valid_states:
+        fail(f"unexpected installed runtime version: {current_version!r}")
+    if current_size != valid_states[current_version]:
+        fail(
+            f"Installed-Size does not match {current_version}: "
+            f"{current_size!r}"
+        )
+
+    md5_path = info / "libx11-6:arm64.md5sums"
+    if md5_path.is_symlink() or not md5_path.is_file():
+        fail(f"installed md5sums file is missing or non-regular: {md5_path}")
+
+    current_md5_hash = digest(md5_path.read_bytes())
+    if current_md5_hash not in (
+        expected_old_md5sums_sha256,
+        expected_new_md5sums_sha256,
+    ):
+        fail(f"unexpected existing md5sums hash: {current_md5_hash}")
+
+    # Preserve the full original dpkg status and old md5sums before changing
+    # either. The copies are resumable and are checked on every invocation.
+    backup_dir = deb_cache / "pre-overlay-preserved" / "dpkg" / "libx11-6"
+    if os.path.lexists(backup_dir) and backup_dir.is_symlink():
+        fail(f"dpkg backup directory must not be a symlink: {backup_dir}")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    status_backup = backup_dir / "status.before-noble-updates"
+    md5_backup = backup_dir / "md5sums.before-noble-updates"
+
+    def backup_verified(original, backup, required_hash=None):
+        if os.path.lexists(backup):
+            if backup.is_symlink() or not backup.is_file():
+                fail(f"preserved dpkg backup is not a regular file: {backup}")
+        else:
+            if required_hash is not None:
+                actual_original = digest(original.read_bytes())
+                if actual_original != required_hash:
+                    fail(
+                        f"cannot preserve original {original.name}: "
+                        f"expected {required_hash}, got {actual_original}"
+                    )
+            preserve_backup(original, backup, required_hash)
+
+        return digest(backup.read_bytes())
+
+    status_backup_hash = backup_verified(status_path, status_backup)
+    md5_backup_hash = backup_verified(
+        md5_path, md5_backup, expected_old_md5sums_sha256
+    )
+
+    original_status = parse_status(status_backup)
+    original_record = original_status.get(package)
+    if not original_record:
+        fail("preserved status backup has no libx11-6 stanza")
+    if original_record.get("Version") != old_version:
+        fail("preserved status backup has unexpected original version")
+    if original_record.get("Installed-Size") != old_installed_size:
+        fail("preserved status backup has unexpected original Installed-Size")
+
+    if md5_backup_hash != expected_old_md5sums_sha256:
+        fail("preserved original md5sums backup hash is unexpected")
+
+    # If the status file is already updated, the verified backups must exist.
+    # If the md5sums update was interrupted, the same backups permit recovery.
+    if current_version == old_version:
+        text = status_path.read_text(errors="strict")
+        chunks = re.split(r"(\n\n+)", text)
+        matches = 0
+
+        for index in range(0, len(chunks), 2):
+            block = chunks[index]
+            fields = parse_fields(block)
+            if fields.get("Package") != package:
+                continue
+
+            matches += 1
+            block, version_count = re.subn(
+                r"(?m)^Version:[^\r\n]*",
+                f"Version: {new_version}",
+                block,
+            )
+            block, size_count = re.subn(
+                r"(?m)^Installed-Size:[^\r\n]*",
+                f"Installed-Size: {new_installed_size}",
+                block,
+            )
+            if version_count != 1 or size_count != 1:
+                fail("cannot uniquely update Version and Installed-Size")
+            chunks[index] = block
+
+        if matches != 1:
+            fail(f"expected one dpkg status stanza; found {matches}")
+
+        atomic_write(status_path, "".join(chunks).encode())
+
+    if current_md5_hash == expected_old_md5sums_sha256:
+        atomic_write(md5_path, md5sums)
+
+    # Verify the resulting dpkg state before allowing the overlay to continue.
+    updated_status = parse_status(status_path)
+    updated_record = updated_status.get(package)
+    if not updated_record:
+        fail("updated dpkg status stanza disappeared")
+    if updated_record.get("Version") != new_version:
+        fail("updated dpkg Version did not persist")
+    if updated_record.get("Installed-Size") != new_installed_size:
+        fail("updated dpkg Installed-Size did not persist")
+    if digest(md5_path.read_bytes()) != expected_new_md5sums_sha256:
+        fail("updated dpkg md5sums file did not persist")
+
+    print(
+        "[mi50-cross] Verified existing libx11-6 payload and reconciled "
+        f"dpkg metadata to {new_version}; runtime binaries unchanged"
+    )
+
+    return {
+        "package": package,
+        "origin": "noble-updates",
+        "version": new_version,
+        "package_archive_sha256": expected_archive_sha256,
+        "verified_payload_paths": len(data_entries),
+        "verified_md5_entries": md5_count,
+        "md5sums_sha256": expected_new_md5sums_sha256,
+        "previous_status_version": old_version,
+        "installed_status_version": new_version,
+        "previous_installed_size": old_installed_size,
+        "installed_size": new_installed_size,
+        "preserved_status_backup": str(status_backup),
+        "preserved_status_sha256": status_backup_hash,
+        "preserved_md5sums_backup": str(md5_backup),
+        "preserved_md5sums_sha256": md5_backup_hash,
+    }
+
+
+ppa_records = parse_index(PPA_INDEX, False)
+noble_records = parse_index(NOBLE_INDEX, True)
+noble_updates_records = parse_index(NOBLE_UPDATES_INDEX, True)
+status_path = sysroot / "var/lib/dpkg/status"
+status = parse_status(status_path)
+
+reconciled_runtime_packages = [
+    reconcile_libx11_runtime_metadata(noble_updates_records, status)
+]
+status = parse_status(status_path)
+
+for package, version in RUNTIME_VERSIONS.items():
+    record = status.get(package)
+    if not record or record.get("Status") != "install ok installed":
+        raise SystemExit(f"Expected installed runtime package is absent: {package}")
+    if record.get("Version") != version:
+        raise SystemExit(
+            f"Runtime provenance mismatch for {package}: "
+            f"expected {version}, found {record.get('Version')}"
+        )
+
+resolved = []
+for package, origin, version, expected_sha, architectures in PACKAGES:
+    index_by_origin = {
+        "ppa": ppa_records,
+        "noble": noble_records,
+        "noble-updates": noble_updates_records,
+    }
+    index = index_by_origin.get(origin)
+    if index is None:
+        raise SystemExit(f"Unknown pinned package origin: {origin}")
+    record = index.get(package)
+    if not record:
+        raise SystemExit(f"{origin} package index has no record for {package}")
+    if record.get("Version") != version:
+        raise SystemExit(
+            f"Pinned version mismatch for {package}: expected {version}, "
+            f"index has {record.get('Version')}"
+        )
+    if record.get("Architecture") not in architectures:
+        raise SystemExit(
+            f"Unexpected architecture for {package}: {record.get('Architecture')}"
+        )
+    if record.get("SHA256") != expected_sha:
+        raise SystemExit(f"Cached index SHA256 mismatch for pinned package {package}")
+    rel = PurePosixPath(record.get("Filename", ""))
+    if rel.is_absolute() or ".." in rel.parts or not rel.parts:
+        raise SystemExit(f"Unsafe package filename for {package}: {rel}")
+    resolved.append((package, origin, record, expected_sha))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def compression_args(member: str) -> list[str]:
+    if member.endswith(".zst"):
+        return ["--zstd"]
+    if member.endswith(".xz"):
+        return ["--xz"]
+    if member.endswith(".gz"):
+        return ["--gzip"]
+    if member.endswith(".bz2"):
+        return ["--bzip2"]
+    return []
+
+
+def safe_member_path(name: str) -> PurePosixPath:
+    path = PurePosixPath(name)
+    if path.is_absolute() or ".." in path.parts:
+        raise SystemExit(f"Unsafe path in Debian data archive: {name}")
+    clean = PurePosixPath(*(part for part in path.parts if part not in ("", ".")))
+    return clean
+
+
+preserved_documentation_conflicts: list[dict[str, object]] = []
+replaced_metadata_headers: list[dict[str, object]] = []
+replaced_api_headers: list[dict[str, object]] = []
+
+
+def is_documentation_path(relative: Path) -> bool:
+    return len(relative.parts) >= 4 and relative.parts[:3] == ("usr", "share", "doc")
+
+
+def describe_entry(path: Path) -> dict[str, str]:
+    if path.is_symlink():
+        return {"type": "symlink", "target": os.readlink(path)}
+    if path.is_file():
+        return {"type": "file", "sha256": sha256(path)}
+    if path.is_dir():
+        return {"type": "directory"}
+    return {"type": "other"}
+
+
+def normalize_egl_header(data: bytes) -> bytes:
+    data = re.sub(
+        rb'(?m)^\*\* Khronos \$Git commit SHA1: [0-9a-f]{10} \$ on \$Git commit date: [^\r\n]+ \$\r?$',
+        b'** Khronos $Git commit SHA1: <revision> $ on $Git commit date: <date> $',
+        data,
+    )
+    return re.sub(
+        rb'(?m)^/\* Generated on date [0-9]{8} \*/\r?$',
+        b'/* Generated on date <date> */',
+        data,
+    )
+
+
+def adopt_generated_egl_header(
+    package: str, relative: Path, existing: Path, incoming: Path
+) -> bool:
+    if package != "libegl-dev" or relative.as_posix() != "usr/include/EGL/egl.h":
+        return False
+    if existing.is_symlink() or not existing.is_file() or not incoming.is_file():
+        return False
+
+    current_hash = sha256(existing)
+    new_hash = sha256(incoming)
+    existing_bytes = existing.read_bytes()
+    incoming_bytes = incoming.read_bytes()
+
+    if normalize_egl_header(existing_bytes) != normalize_egl_header(incoming_bytes):
+        return False
+
+    backup = deb_cache / "pre-overlay-preserved" / Path(*relative.parts)
+
+    if os.path.lexists(backup):
+        if backup.is_symlink() or not backup.is_file():
+            raise SystemExit(f"Existing EGL header backup is not a regular file: {backup}")
+        backup_hash = sha256(backup)
+        if normalize_egl_header(backup.read_bytes()) != normalize_egl_header(incoming_bytes):
+            raise SystemExit(f"Existing EGL header backup is not equivalent to pinned package: {backup}")
+
+        if current_hash == new_hash:
+            # A previous attempt installed the pinned header but failed before
+            # writing the marker. Verify the backup and resume the audit.
+            print("[mi50-cross] Recovering previously installed pinned EGL header")
+        elif current_hash == backup_hash:
+            # Original is still installed; proceed with the verified replacement.
+            temporary = existing.with_name(existing.name + f".mi50-overlay-{os.getpid()}.tmp")
+            if os.path.lexists(temporary):
+                raise SystemExit(f"Refusing to overwrite existing temporary header: {temporary}")
+            shutil.copy2(incoming, temporary)
+            os.replace(temporary, existing)
+        else:
+            raise SystemExit(
+                f"EGL header matches neither preserved original nor pinned version: {existing}"
+            )
+    else:
+        if current_hash == new_hash:
+            return False
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(existing, backup)
+        backup_hash = sha256(backup)
+        if backup_hash != current_hash:
+            raise SystemExit(f"Failed to verify preserved EGL header backup: {backup}")
+
+        temporary = existing.with_name(existing.name + f".mi50-overlay-{os.getpid()}.tmp")
+        if os.path.lexists(temporary):
+            raise SystemExit(f"Refusing to overwrite existing temporary header: {temporary}")
+        shutil.copy2(incoming, temporary)
+        os.replace(temporary, existing)
+
+    if sha256(existing) != new_hash:
+        raise SystemExit(f"Installed EGL header does not match pinned package: {existing}")
+
+    replaced_metadata_headers.append({
+        "package": package,
+        "path": relative.as_posix(),
+        "reason": "Only Khronos source revision/date and generated-date comments differ",
+        "preserved_original": str(backup),
+        "original_sha256": backup_hash,
+        "installed_sha256": new_hash,
+    })
+    print(f"[mi50-cross] Verified pinned EGL header; original preserved at {backup}")
+    return True
+
+
+
+API_HEADER_REPLACEMENTS = {
+    "usr/include/EGL/eglext.h": {
+        "original_sha256": "fbc70471a706d5c36427f032fa528de72bb0cfa2efb278d82b6bf2f675543295",
+        "installed_sha256": "a5f574a0074001400c6c50232235ee00e9a67b2168bfd1c364ba0f6f52e5a75c",
+        "reason": (
+            "Adopts the pinned Khronos EGL extension header matching the pinned "
+            "libegl1 runtime; includes 2026 extension definitions and the revised "
+            "EGL_EXT_surface_compression query signature."
+        ),
+    },
+    "usr/include/EGL/eglplatform.h": {
+        "original_sha256": "1081d0dd1099f5f0367d21c2949e3be344d3fe37c41e7cab907b12ef71f95703",
+        "installed_sha256": "25b5391655effcf363a38fa00c3154f356a3eab3d35dc067847875513cf1e441",
+        "reason": (
+            "Adopts the pinned Khronos EGL platform header, which adds QNX "
+            "native-type definitions while preserving the Linux platform branch."
+        ),
+    },
+}
+
+replaced_api_headers: list[dict[str, object]] = []
+
+
+def adopt_pinned_egl_api_header(
+    package: str, relative: Path, existing: Path, incoming: Path
+) -> bool:
+    if package != "libegl-dev":
+        return False
+
+    expected = API_HEADER_REPLACEMENTS.get(relative.as_posix())
+    if expected is None:
+        return False
+
+    if (
+        existing.is_symlink()
+        or not existing.is_file()
+        or incoming.is_symlink()
+        or not incoming.is_file()
+    ):
+        raise SystemExit(
+            f"Refusing non-regular EGL API header replacement: {relative}"
+        )
+
+    expected_old_hash = str(expected["original_sha256"])
+    expected_new_hash = str(expected["installed_sha256"])
+    incoming_hash = sha256(incoming)
+
+    if incoming_hash != expected_new_hash:
+        raise SystemExit(
+            f"Pinned EGL API header has unexpected bytes: {relative}; "
+            f"expected {expected_new_hash}, got {incoming_hash}"
+        )
+
+    current_hash = sha256(existing)
+    backup = deb_cache / "pre-overlay-preserved" / Path(*relative.parts)
+
+    if os.path.lexists(backup):
+        if backup.is_symlink() or not backup.is_file():
+            raise SystemExit(
+                f"Existing EGL API header backup is not a regular file: {backup}"
+            )
+
+        backup_hash = sha256(backup)
+        if backup_hash != expected_old_hash:
+            raise SystemExit(
+                f"Existing EGL API header backup has unexpected bytes: {backup}; "
+                f"expected {expected_old_hash}, got {backup_hash}"
+            )
+    else:
+        if current_hash != expected_old_hash:
+            raise SystemExit(
+                f"Cannot establish original EGL API header for {relative}; "
+                f"expected {expected_old_hash}, got {current_hash}, "
+                "and no verified backup exists"
+            )
+
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        if os.path.lexists(backup):
+            raise SystemExit(
+                f"Refusing to overwrite EGL API header backup: {backup}"
+            )
+
+        shutil.copy2(existing, backup)
+        backup_hash = sha256(backup)
+
+        if backup_hash != expected_old_hash:
+            raise SystemExit(
+                f"Preserved EGL API header backup failed verification: {backup}"
+            )
+
+    if current_hash == expected_old_hash:
+        temporary = existing.with_name(
+            existing.name + f".mi50-overlay-{os.getpid()}.tmp"
+        )
+        if os.path.lexists(temporary):
+            raise SystemExit(
+                f"Refusing to overwrite temporary EGL API header: {temporary}"
+            )
+
+        shutil.copy2(incoming, temporary)
+        if sha256(temporary) != expected_new_hash:
+            raise SystemExit(
+                f"Temporary EGL API header failed verification: {temporary}"
+            )
+        os.replace(temporary, existing)
+
+    elif current_hash == expected_new_hash:
+        print(
+            "[mi50-cross] Recovering previously installed pinned EGL API header: "
+            f"{relative}"
+        )
+
+    else:
+        raise SystemExit(
+            f"Refusing unexpected existing EGL API header: {relative}; "
+            f"got {current_hash}"
+        )
+
+    installed_hash = sha256(existing)
+    if installed_hash != expected_new_hash:
+        raise SystemExit(
+            f"Installed EGL API header failed verification: {existing}"
+        )
+
+    replaced_api_headers.append({
+        "package": package,
+        "package_archive_sha256": (
+            "f0b89ca01bdf15090fc2ae6d90998e181b0e469e47454b16dcd7f183b544be04"
+        ),
+        "path": relative.as_posix(),
+        "reason": expected["reason"],
+        "preserved_original": str(backup),
+        "original_sha256": backup_hash,
+        "installed_sha256": installed_hash,
+    })
+
+    print(
+        "[mi50-cross] Adopted verified pinned EGL API header; "
+        f"original preserved at {backup}"
+    )
+    return True
+
+
+def preserve_documentation_conflict(
+    package: str, relative: Path, existing: Path, incoming: Path
+) -> bool:
+    if not is_documentation_path(relative):
+        return False
+
+    record = {
+        "package": package,
+        "path": relative.as_posix(),
+        "existing": describe_entry(existing),
+        "incoming": describe_entry(incoming),
+    }
+    preserved_documentation_conflicts.append(record)
+    print(
+        "[mi50-cross] Preserving existing documentation collision: "
+        f"{package}: {relative.as_posix()}"
+    )
+    return True
+
+
+def merge_tree(source: Path, package: str) -> None:
+    entries = sorted(
+        source.rglob("*"),
+        key=lambda p: (len(p.relative_to(source).parts), str(p))
+    )
+    skipped_doc_prefixes: set[Path] = set()
+
+    for src in entries:
+        relative = src.relative_to(source)
+
+        # If an existing documentation path blocks a package directory,
+        # preserve that path and skip its incoming descendants as well.
+        if any(
+            relative == prefix or prefix in relative.parents
+            for prefix in skipped_doc_prefixes
+        ):
+            continue
+
+        dst = sysroot.joinpath(*relative.parts)
+        parent = dst.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        parent_real = parent.resolve()
+        if not parent_real.is_relative_to(sysroot.resolve()):
+            raise SystemExit(
+                f"Overlay destination escapes sysroot through a parent symlink: {dst}"
+            )
+
+        if src.is_symlink():
+            link = os.readlink(src)
+            if os.path.isabs(link):
+                raise SystemExit(
+                    f"Refusing absolute symlink from overlay: {relative} -> {link}"
+                )
+            normalized = os.path.normpath(os.path.join(str(relative.parent), link))
+            if normalized == ".." or normalized.startswith("../"):
+                raise SystemExit(
+                    f"Refusing escaping symlink from overlay: {relative} -> {link}"
+                )
+            if dst.is_symlink() and os.readlink(dst) == link:
+                continue
+            if os.path.lexists(dst):
+                if preserve_documentation_conflict(package, relative, dst, src):
+                    continue
+                raise SystemExit(
+                    f"Overlay would replace an existing non-identical path: {dst}"
+                )
+            dst.symlink_to(link)
+
+        elif src.is_dir():
+            if os.path.lexists(dst) and not dst.is_dir():
+                if preserve_documentation_conflict(package, relative, dst, src):
+                    skipped_doc_prefixes.add(relative)
+                    continue
+                raise SystemExit(
+                    f"Overlay directory conflicts with existing path: {dst}"
+                )
+            dst.mkdir(parents=True, exist_ok=True)
+
+        elif src.is_file():
+            if os.path.lexists(dst):
+                # Run the pinned API-header adopter before the identical-file
+                # shortcut. This lets an interrupted overlay reconstruct its
+                # replacement audit records from verified original backups.
+                # Both EGL header adopters must run before the identical-file
+                # shortcut so interrupted installations reconstruct marker records.
+                if adopt_pinned_egl_api_header(package, relative, dst, src):
+                    continue
+                if adopt_generated_egl_header(package, relative, dst, src):
+                    continue
+                if (
+                    dst.is_file()
+                    and not dst.is_symlink()
+                    and sha256(dst) == sha256(src)
+                ):
+                    continue
+                if preserve_documentation_conflict(package, relative, dst, src):
+                    continue
+                raise SystemExit(
+                    f"Overlay would replace an existing non-identical path: {dst}"
+                )
+            shutil.copy2(src, dst, follow_symlinks=False)
+
+        else:
+            raise SystemExit(
+                f"Unsupported special file in package overlay: {src}"
+            )
+
+
+for package, origin, record, expected_sha in resolved:
+    basename = Path(record["Filename"]).name
+    deb = deb_cache / basename
+    if not deb.is_file() or sha256(deb) != expected_sha:
+        base_by_origin = {
+            "ppa": PPA_BASE,
+            "noble": UBUNTU_BASE,
+            "noble-updates": UBUNTU_BASE,
+        }
+        base = base_by_origin.get(origin)
+        if base is None:
+            raise SystemExit(f"Unknown download origin: {origin}")
+        url = base + record["Filename"]
+        temporary = deb.with_suffix(deb.suffix + ".part")
+        print(f"[mi50-cross] Downloading pinned {origin} package {package} {record['Version']}")
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": "mi50-arm64-cross/1"})
+            with urllib.request.urlopen(request, timeout=60) as response, temporary.open("wb") as output:
+                shutil.copyfileobj(response, output)
+            actual = sha256(temporary)
+            if actual != expected_sha:
+                raise SystemExit(
+                    f"SHA256 mismatch for {package}: expected {expected_sha}, got {actual}"
+                )
+            os.replace(temporary, deb)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+    if sha256(deb) != expected_sha:
+        raise SystemExit(f"Cached archive SHA256 mismatch for {package}")
+
+    members = subprocess.check_output(["ar", "t", str(deb)], text=True).splitlines()
+    data_member = next((member for member in members if member.startswith("data.tar")), None)
+    if not data_member:
+        raise SystemExit(f"No data.tar member found in {deb}")
+    payload = subprocess.check_output(["ar", "p", str(deb), data_member])
+    comp = compression_args(data_member)
+    listing = subprocess.run(["tar", *comp, "-tf", "-"], input=payload,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if listing.returncode:
+        raise SystemExit(f"Cannot list data archive for {package}: {listing.stderr.decode(errors='replace')}")
+    for name in listing.stdout.splitlines():
+        safe_member_path(os.fsdecode(name))
+    with tempfile.TemporaryDirectory(prefix=f"mi50-gl-{package}-", dir=deb_cache) as temporary_dir:
+        package_root = Path(temporary_dir)
+        extract = subprocess.run(
+            ["tar", "--no-same-owner", *comp, "-xf", "-", "--keep-directory-symlink", "-C", str(package_root)],
+            input=payload, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        if extract.returncode:
+            raise SystemExit(
+                f"Cannot extract {package}: {extract.stderr.decode(errors='replace')}"
+            )
+        merge_tree(package_root, package)
+    print(f"[mi50-cross] Added verified development payload: {package}")
+
+for relative in REQUIRED:
+    path = sysroot / relative
+    if not os.path.lexists(path):
+        raise SystemExit(f"Required OpenGL development artifact was not installed: {path}")
+
+marker_data = {
+    "schema": 1,
+    "overlay": "mi50-gl-dev",
+    "runtime_provenance": "ernstp/mesarc noble + Ubuntu Noble Updates X11",
+    "packages": [
+        {"name": name, "origin": origin, "version": record["Version"], "sha256": digest}
+        for name, origin, record, digest in resolved
+    ],
+    "required_paths": REQUIRED,
+    "preserved_documentation_conflicts": preserved_documentation_conflicts,
+    "replaced_metadata_headers": replaced_metadata_headers,
+    "replaced_api_headers": replaced_api_headers,
+    "reconciled_runtime_packages": reconciled_runtime_packages,
+}
+temporary_marker = MARKER.with_suffix(".tmp")
+temporary_marker.write_text(json.dumps(marker_data, indent=2) + "\n")
+os.replace(temporary_marker, MARKER)
+print(f"[mi50-cross] OpenGL development overlay verified: {MARKER}")
+PY_GL
+
+  for artifact in \
+    "$SYSROOT/usr/include/GL/gl.h" \
+    "$SYSROOT/usr/include/GL/glext.h" \
+    "$SYSROOT/usr/include/GL/glx.h" \
+    "$SYSROOT/usr/include/GL/glxext.h" \
+    "$SYSROOT/usr/include/EGL/egl.h" \
+    "$SYSROOT/usr/include/EGL/eglext.h" \
+    "$SYSROOT/usr/include/EGL/eglplatform.h" \
+    "$SYSROOT/usr/include/X11/Xlib.h" \
+    "$SYSROOT/usr/include/X11/Xutil.h" \
+    "$SYSROOT/usr/include/xcb/xcb.h" \
+    "$SYSROOT/usr/lib/aarch64-linux-gnu/libGL.so" \
+    "$SYSROOT/usr/lib/aarch64-linux-gnu/libGLX.so" \
+    "$SYSROOT/usr/lib/aarch64-linux-gnu/libOpenGL.so" \
+    "$SYSROOT/usr/lib/aarch64-linux-gnu/libEGL.so"; do
+    [ -e "$artifact" ] || die "OpenGL development overlay is incomplete: $artifact"
+  done
+  log "OpenGL development overlay is ready"
+}
+
 stage_toolchain() {
   log "Creating isolated cross toolchain and host LLVM package shims"
   ensure_work_root_safe
@@ -404,6 +1533,9 @@ set(CMAKE_C_COMPILER "$host_clang")
 set(CMAKE_CXX_COMPILER "$host_clangxx")
 set(CMAKE_C_COMPILER_TARGET aarch64-linux-gnu)
 set(CMAKE_CXX_COMPILER_TARGET aarch64-linux-gnu)
+set(CMAKE_ASM_COMPILER "$host_clang")
+set(CMAKE_ASM_COMPILER_TARGET aarch64-linux-gnu)
+set(CMAKE_ASM_FLAGS_INIT "--gcc-install-dir=$gcc_dir")
 set(CMAKE_C_FLAGS_INIT "--gcc-install-dir=$gcc_dir")
 set(CMAKE_CXX_FLAGS_INIT "--gcc-install-dir=$gcc_dir -stdlib=libstdc++")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "--gcc-install-dir=$gcc_dir -fuse-ld=lld -Wl,-rpath-link,$SYSROOT/lib/aarch64-linux-gnu:$SYSROOT/usr/lib/aarch64-linux-gnu:$TARGET_ROCM/lib")
@@ -470,6 +1602,27 @@ apply_patch_idempotent() {
   fi
 }
 
+
+apply_clr_hip_graph_api_patch() {
+  local dir=$1
+  local legacy_patch="$REPO_ROOT/patches/0010-clr-hip-version-script-combined.patch"
+  local patch_file="$REPO_ROOT/patches/0011-clr-hip-graph-api-forwarders.patch"
+
+  if git -C "$dir" apply --reverse --check "$patch_file" >/dev/null 2>&1; then
+    log "Replacement patch already applied: $(basename "$patch_file")"
+    return
+  fi
+
+  if [ -f "$legacy_patch" ] &&
+     git -C "$dir" apply --reverse --check "$legacy_patch" >/dev/null 2>&1; then
+    git -C "$dir" apply --reverse "$legacy_patch" ||
+      die "Failed to reverse legacy patch: $legacy_patch"
+    log "Reversed legacy patch: $(basename "$legacy_patch")"
+  fi
+
+  apply_patch_idempotent "$dir" "$patch_file"
+}
+
 stage_host_venv() {
   log "Preparing host Python build-helper venv"
   ensure_work_root_safe
@@ -487,10 +1640,16 @@ stage_fetch() {
   clone_rocm_repo llvm-project llvm-project
   clone_rocm_repo ROCR-Runtime ROCR-Runtime
   clone_rocm_repo rocminfo rocminfo
+  clone_rocm_repo HIP HIP
+  clone_rocm_repo clr clr
   apply_patch_idempotent "$SRC/rocminfo" "$REPO_ROOT/patches/0001-rocminfo-cross-system-processor.patch"
   apply_patch_idempotent "$SRC/ROCR-Runtime" "$REPO_ROOT/patches/0002-rocr-runtime-aarch64-intrinsics.patch"
   apply_patch_idempotent "$SRC/llvm-project" "$REPO_ROOT/patches/0003-device-libs-cmake4-cmp0053.patch"
   apply_patch_idempotent "$SRC/llvm-project" "$REPO_ROOT/patches/0004-comgr-cross-host-tools.patch"
+  apply_patch_idempotent "$SRC/clr" "$REPO_ROOT/patches/0005-clr-cross-host-tools-and-hip-config.patch"
+  apply_patch_idempotent "$SRC/HIP" "$REPO_ROOT/patches/0006-hip-lang-config-cross-target.patch"
+  apply_patch_idempotent "$SRC/clr" "$REPO_ROOT/patches/0007-clr-aarch64-memory-barriers.patch"
+  apply_clr_hip_graph_api_patch "$SRC/clr"
 }
 
 stage_rocm_cmake() {
@@ -722,6 +1881,126 @@ stage_rocminfo() {
   cmake --install "$BLD/rocminfo"
 }
 
+stage_compiler_rt() {
+  log "Cross-building standalone ARM64 compiler-rt builtins"
+  [ "$CROSS_COMPILER" = clang ] || die "compiler-rt stage currently requires CROSS_COMPILER=clang"
+  [ -f "$TOOLCHAIN_DIR/aarch64-noble-toolchain.cmake" ] || die "Run toolchain stage first"
+  [ -d "$SRC/llvm-project/.git" ] || die "Run fetch stage first"
+  [ -d "$TARGET_LLVM/lib/clang" ] || die "Run target_llvm stage first"
+  [ -d "$HOST_LLVM/lib/clang" ] || die "Run host_llvm stage first"
+
+  local res_dir res_ver host_res_dir host_res_ver installed_rt target_rt machines host_reported_rt compiler_rt_tc compiler_rt_build gcc_dir
+  res_dir=$(find "$TARGET_LLVM/lib/clang" -mindepth 1 -maxdepth 1 -type d | sort | head -n1)
+  [ -n "$res_dir" ] || die "Could not detect Clang resource dir under $TARGET_LLVM/lib/clang"
+  res_ver=$(basename "$res_dir")
+  host_res_dir=$(find "$HOST_LLVM/lib/clang" -mindepth 1 -maxdepth 1 -type d | sort | head -n1)
+  [ -n "$host_res_dir" ] || die "Could not detect host Clang resource directory"
+  host_res_ver=$(basename "$host_res_dir")
+  [ "$host_res_ver" = "$res_ver" ] || die "Host/target Clang resource versions differ: host=$host_res_ver target=$res_ver"
+  gcc_dir="$SYSROOT/usr/lib/gcc/aarch64-linux-gnu/13"
+  compiler_rt_tc="$TOOLCHAIN_DIR/compiler-rt-aarch64-toolchain.cmake"
+  compiler_rt_build="$BLD/compiler-rt-builtins-hostclang"
+  cat > "$compiler_rt_tc" <<EOF_RT_TC
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR aarch64)
+set(CMAKE_SYSROOT "$SYSROOT")
+set(CMAKE_FIND_ROOT_PATH "$SYSROOT")
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE NEVER)
+set(CMAKE_C_COMPILER "$HOST_LLVM/bin/clang")
+set(CMAKE_C_COMPILER_TARGET aarch64-linux-gnu)
+set(CMAKE_ASM_COMPILER "$HOST_LLVM/bin/clang")
+set(CMAKE_ASM_COMPILER_TARGET aarch64-linux-gnu)
+set(CMAKE_C_FLAGS_INIT "--gcc-install-dir=$gcc_dir")
+set(CMAKE_ASM_FLAGS_INIT "--gcc-install-dir=$gcc_dir")
+EOF_RT_TC
+  for tool in llvm-ar llvm-nm llvm-ranlib llvm-config; do [ -x "$HOST_LLVM/bin/$tool" ] || die "Missing host LLVM tool: $HOST_LLVM/bin/$tool"; done
+
+  cmake -S "$SRC/llvm-project/compiler-rt/lib/builtins" -B "$compiler_rt_build" -G Ninja     -DCMAKE_BUILD_TYPE=Release     -DCMAKE_TOOLCHAIN_FILE="$compiler_rt_tc"     -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY     -DLLVM_DIR="$HOST_LLVM/lib/cmake/llvm" -DLLVM_CMAKE_DIR="$HOST_LLVM" -DCMAKE_AR="$HOST_LLVM/bin/llvm-ar" -DCMAKE_NM="$HOST_LLVM/bin/llvm-nm" -DCMAKE_RANLIB="$HOST_LLVM/bin/llvm-ranlib"     -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF     -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON     -DCOMPILER_RT_OS_DIR=linux     -DCOMPILER_RT_INSTALL_PATH="$host_res_dir" -DCOMPILER_RT_INSTALL_LIBRARY_DIR="$host_res_dir/lib/linux" -DCMAKE_INSTALL_PREFIX="$host_res_dir"
+  cmake --build "$compiler_rt_build" --parallel "$JOBS"
+  cmake --install "$compiler_rt_build"
+
+  installed_rt="$host_res_dir/lib/linux/libclang_rt.builtins-aarch64.a"
+  [ -f "$installed_rt" ] || die "Missing installed ARM64 builtins archive: $installed_rt"
+  machines=$(readelf -h "$installed_rt" | awk '/Machine:/ {print $2}' | sort -u)
+  [ "$machines" = AArch64 ] || die "Expected only AArch64 compiler-rt members in $installed_rt, got: $machines"
+  host_reported_rt=$("$HOST_LLVM/bin/clang" --target=aarch64-linux-gnu -print-libgcc-file-name --rtlib=compiler-rt)
+  [ "$host_reported_rt" = "$installed_rt" ] || die "Host Clang reports unexpected compiler-rt path: $host_reported_rt"
+
+  target_rt="$res_dir/lib/linux/libclang_rt.builtins-aarch64.a"
+  mkdir -p "$(dirname "$target_rt")"
+  install -m 0644 "$installed_rt" "$target_rt"
+  [ "$(sha256sum "$installed_rt" | awk '{print $1}')" = "$(sha256sum "$target_rt" | awk '{print $1}')" ] || die "Host/target compiler-rt archive copy mismatch"
+  log "Builtins installed for host Clang at $installed_rt and staged for target Clang at $target_rt"
+}
+
+stage_hip() {
+  log "Cross-building HIP runtime (clr + HIP)"
+  [ "$CROSS_COMPILER" = clang ] || die "HIP stage currently requires CROSS_COMPILER=clang"
+  [ -f "$TOOLCHAIN_DIR/aarch64-noble-toolchain.cmake" ] || die "Run toolchain stage first"
+  [ -d "$SRC/HIP/.git" ] || die "Run fetch stage first"
+  [ -d "$SRC/clr/.git" ] || die "Run fetch stage first"
+  [ -x "$HOST_VENV/bin/python" ] || die "Run host_venv stage first"
+  [ -x "$HOST_LLVM/bin/clang" ] || die "Run host_llvm stage first"
+  [ -x "$HOST_LLVM/bin/llvm-mc" ] || die "Run host_llvm stage first"
+  [ -f "$SYSROOT/.mi50-gl-dev-overlay.json" ] || die "Run gl_dev_overlay stage first"
+  [ -f "$SYSROOT/usr/include/GL/gl.h" ] || die "OpenGL headers are missing from the sysroot"
+  [ -f "$SYSROOT/usr/include/GL/glext.h" ] || die "OpenGL extension headers are missing from the sysroot"
+  [ -f "$SYSROOT/usr/include/GL/glx.h" ] || die "GLX headers are missing from the sysroot"
+  [ -f "$SYSROOT/usr/include/EGL/egl.h" ] || die "EGL headers are missing from the sysroot"
+  [ -f "$SYSROOT/usr/include/EGL/eglext.h" ] || die "EGL extension headers are missing from the sysroot"
+  [ -f "$SYSROOT/usr/include/EGL/eglplatform.h" ] || die "EGL platform headers are missing from the sysroot"
+  [ -e "$SYSROOT/usr/lib/aarch64-linux-gnu/libGL.so" ] || die "OpenGL development linker symlink is missing"
+  [ -e "$SYSROOT/usr/lib/aarch64-linux-gnu/libEGL.so" ] || die "EGL development linker symlink is missing"
+  [ -f "$HOST_LLVM/lib/clang/18/lib/linux/libclang_rt.builtins-aarch64.a" ] || die "Run compiler_rt stage first (host compiler-rt archive missing)"
+  [ -f "$TARGET_LLVM/lib/clang/18/lib/linux/libclang_rt.builtins-aarch64.a" ] || die "Run compiler_rt stage first (target compiler-rt archive missing)"
+  [ -f "$TARGET_ROCM/lib/cmake/amd_comgr/amd_comgr-config.cmake" ] || die "Run comgr stage first"
+  [ -f "$TARGET_ROCM/lib/cmake/hsa-runtime64/hsa-runtime64-config.cmake" ] || die "Run rocr stage first"
+  [ -x "$TARGET_ROCM/bin/hipconfig" ] || die "Run hipcc stage first"
+  apply_patch_idempotent "$SRC/clr" "$REPO_ROOT/patches/0005-clr-cross-host-tools-and-hip-config.patch"
+  apply_patch_idempotent "$SRC/HIP" "$REPO_ROOT/patches/0006-hip-lang-config-cross-target.patch"
+  apply_patch_idempotent "$SRC/clr" "$REPO_ROOT/patches/0007-clr-aarch64-memory-barriers.patch"
+  apply_clr_hip_graph_api_patch "$SRC/clr"
+
+  local clr_shim="$BLD/clr-host-llvm-cmake" gcc_dir="$SYSROOT/usr/lib/gcc/aarch64-linux-gnu/13"
+  mkdir -p "$clr_shim"
+  cat > "$clr_shim/rocm-hiprtc-clang" <<EOF_WRAP
+#!/usr/bin/env bash
+exec "$HOST_LLVM/bin/clang" --target=aarch64-linux-gnu --sysroot="$SYSROOT" --gcc-install-dir="$gcc_dir" "\$@"
+EOF_WRAP
+  chmod +x "$clr_shim/rocm-hiprtc-clang"
+  cat > "$clr_shim/LLVMConfig.cmake" <<EOF_CMAKE
+set(LLVM_FOUND TRUE)
+if(NOT TARGET llvm-mc)
+  add_executable(llvm-mc IMPORTED GLOBAL)
+  set_target_properties(llvm-mc PROPERTIES IMPORTED_LOCATION "$HOST_LLVM/bin/llvm-mc")
+endif()
+EOF_CMAKE
+  cat > "$clr_shim/ClangConfig.cmake" <<EOF_CMAKE
+set(Clang_FOUND TRUE)
+set(CLANG_FOUND TRUE)
+if(NOT TARGET clang)
+  add_executable(clang IMPORTED GLOBAL)
+  set_target_properties(clang PROPERTIES IMPORTED_LOCATION "$clr_shim/rocm-hiprtc-clang")
+endif()
+EOF_CMAKE
+
+  PATH="$HOST_VENV/bin:$PATH" cmake -S "$SRC/clr" -B "$BLD/clr" -G Ninja     -DCMAKE_BUILD_TYPE=Release     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_DIR/aarch64-noble-toolchain.cmake"     -DCMAKE_INSTALL_PREFIX="$TARGET_ROCM"     -DCMAKE_INSTALL_RPATH=/opt/rocm/lib     -DCMAKE_PREFIX_PATH="$TARGET_ROCM"     -DPython3_EXECUTABLE="$HOST_VENV/bin/python"     -DLLVM_DIR="$clr_shim"     -DClang_DIR="$clr_shim"     -Damd_comgr_DIR="$TARGET_ROCM/lib/cmake/amd_comgr"     -Dhsa-runtime64_DIR="$TARGET_ROCM/lib/cmake/hsa-runtime64"     -DHIPRTC_MC_TRIPLE=aarch64-linux-gnu -DAMD_OPENCL_INCLUDE_DIR="$SRC/clr/opencl/khronos/headers/opencl2.2/CL"     -DCPP_EXTRA_C_FLAGS="--target=aarch64-linux-gnu;--sysroot=$SYSROOT;--gcc-install-dir=$gcc_dir"     -DCLR_BUILD_HIP=ON     -DCLR_BUILD_OCL=OFF     -DHIP_PLATFORM=amd     -DHIP_COMMON_DIR="$SRC/HIP"     -DHIPCC_BIN_DIR="$TARGET_ROCM/bin"     -DHIP_ENABLE_ROCPROFILER_REGISTER=OFF     -D__HIP_ENABLE_PCH=OFF     -DROCM_PATH="$TARGET_ROCM"
+  PATH="$HOST_VENV/bin:$PATH" cmake --build "$BLD/clr" --parallel "$JOBS"
+
+  local hiprtc_obj="$BLD/clr/hipamd/src/hiprtc/hip_rtc_gen/hipRTC_header.o"
+  [ -f "$hiprtc_obj" ] || die "Missing generated HIPRTC object: $hiprtc_obj"
+  readelf -h "$hiprtc_obj" | grep -q "AArch64" || die "HIPRTC object is not AArch64: $hiprtc_obj"
+  [ -s "$BLD/clr/hipamd/new_header.h.i" ] || die "HIP profiling API preprocessed header was not generated"
+  prof_commands=$(ninja -C "$BLD/clr" -t commands gen-prof-api-str-header)
+  printf "%s\n" "$prof_commands" | grep -Fq -- "--target=aarch64-linux-gnu" || die "Profiling-header preprocessing command lacks the AArch64 target flag"
+  printf "%s\n" "$prof_commands" | grep -Fq -- "--sysroot=$SYSROOT" || die "Profiling-header preprocessing command lacks the Noble sysroot flag"
+
+  PATH="$HOST_VENV/bin:$PATH" cmake --install "$BLD/clr"
+}
+
 check_elf_tree() {
   python3 - "$1" "$SYSROOT" "$TARGET_ROCM" <<'PY'
 import os, re, subprocess, sys
@@ -876,6 +2155,7 @@ run_stage() {
   case "$1" in
     preflight) stage_preflight ;;
     sysroot) stage_sysroot ;;
+    gl_dev_overlay) stage_gl_dev_overlay ;;
     toolchain) stage_toolchain ;;
     host_venv) stage_host_venv ;;
     fetch) stage_fetch ;;
@@ -887,6 +2167,8 @@ run_stage() {
     hipcc) stage_hipcc ;;
     rocr) stage_rocr ;;
     rocminfo) stage_rocminfo ;;
+    compiler_rt) stage_compiler_rt ;;
+    hip) stage_hip ;;
     verify) stage_verify ;;
     *) die "Unknown stage '$1' (valid: ${STAGES[*]})" ;;
   esac

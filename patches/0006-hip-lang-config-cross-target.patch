@@ -1,0 +1,21 @@
+diff --git a/hip-lang-config.cmake.in b/hip-lang-config.cmake.in
+index 1111111..2222222 100644
+--- a/hip-lang-config.cmake.in
++++ b/hip-lang-config.cmake.in
+@@ -116,8 +116,15 @@ if (NOT WIN32)
+   set(CLANGRT_LINUX_OPTION "-unwindlib=libgcc")
+ endif()
+ 
++set(_HIP_LANG_TARGET_OPT "")
++if(CMAKE_HIP_COMPILER_TARGET)
++  set(_HIP_LANG_TARGET_OPT "--target=${CMAKE_HIP_COMPILER_TARGET}")
++elseif(CMAKE_CXX_COMPILER_TARGET)
++  set(_HIP_LANG_TARGET_OPT "--target=${CMAKE_CXX_COMPILER_TARGET}")
++endif()
++
+ execute_process(
+-  COMMAND ${CMAKE_HIP_COMPILER} -print-libgcc-file-name --rtlib=compiler-rt ${CLANGRT_LINUX_OPTION}
++  COMMAND ${CMAKE_HIP_COMPILER} ${_HIP_LANG_TARGET_OPT} -print-libgcc-file-name --rtlib=compiler-rt ${CLANGRT_LINUX_OPTION}
+   OUTPUT_VARIABLE CLANGRT_BUILTINS
+   OUTPUT_STRIP_TRAILING_WHITESPACE
+   RESULT_VARIABLE CLANGRT_BUILTINS_FETCH_EXIT_CODE)

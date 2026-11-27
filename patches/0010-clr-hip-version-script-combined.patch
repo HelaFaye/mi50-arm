@@ -1,0 +1,59 @@
+diff --git a/hipamd/src/hip_hcc.map.in b/hipamd/src/hip_hcc.map.in
+--- a/hipamd/src/hip_hcc.map.in
++++ b/hipamd/src/hip_hcc.map.in
+@@ -271,11 +271,11 @@
+     hipMemcpy2DFromArrayAsync;
+     hipMemcpyAtoH;
+     hipMemcpyHtoA;
+     hipMemcpyParam2DAsync;
+-    __hipGetPCH;
+     hipExtStreamGetCUMask;
+     extern "C++" {
++      __hipGetPCH*;
+     hipCreateSurfaceObject*;
+     hipDestroySurfaceObject*;
+     hipHccModuleLaunchKernel*;
+     hipExtModuleLaunchKernel*;
+@@ -502,16 +502,18 @@
+     hipGraphKernelNodeCopyAttributes;
+     hipGraphNodeGetEnabled;
+     hipGraphNodeSetEnabled;
+     hipGraphUpload;
+-    hipGraphAddExternalSemaphoresSignalNode;
+-    hipGraphAddExternalSemaphoresWaitNode;
+-    hipGraphExternalSemaphoresSignalNodeSetParams;
+-    hipGraphExternalSemaphoresSignalNodeGetParams;
+-    hipGraphExternalSemaphoresWaitNodeSetParams;
+-    hipGraphExternalSemaphoresWaitNodeGetParams;
+-    hipGraphExecExternalSemaphoresSignalNodeSetParams;
+-    hipGraphExecExternalSemaphoresWaitNodeSetParams;
++   extern "C++" {
++      hip::hipGraphAddExternalSemaphoresSignalNode*;
++      hip::hipGraphAddExternalSemaphoresWaitNode*;
++      hip::hipGraphExternalSemaphoresSignalNodeSetParams*;
++      hip::hipGraphExternalSemaphoresSignalNodeGetParams*;
++      hip::hipGraphExternalSemaphoresWaitNodeSetParams*;
++      hip::hipGraphExternalSemaphoresWaitNodeGetParams*;
++      hip::hipGraphExecExternalSemaphoresSignalNodeSetParams*;
++      hip::hipGraphExecExternalSemaphoresWaitNodeSetParams*;
++   };
+ local:
+     *;
+ } hip_5.2;
+ 
+@@ -571,10 +573,12 @@
+     hipMemcpyAtoA;
+     hipMemcpyAtoHAsync;
+     hipMemcpyHtoAAsync;
+     hipMemcpy2DArrayToArray;
+-    hipGraphExecGetFlags;
+-    hipGraphNodeSetParams;
+-    hipGraphExecNodeSetParams;
++   extern "C++" {
++      hip::hipGraphExecGetFlags*;
++      hip::hipGraphNodeSetParams*;
++      hip::hipGraphExecNodeSetParams*;
++   };
+ local:
+     *;
+ } hip_6.1;
