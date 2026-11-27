@@ -75,7 +75,7 @@ jobs:
           test -x "$ROCM_PATH/llvm/bin/llvm-readelf"
       - name: Compile test kernel for gfx906
         run: |
-          "$ROCM_PATH/bin/hipcc" --offload-arch=gfx906 --genco tests/vec_add.hip -o vec_add.hsaco
+          "$ROCM_PATH/bin/hipcc" --offload-arch=gfx906 --genco --no-gpu-bundle-output tests/vec_add.hip -o vec_add.hsaco
           test -s vec_add.hsaco
           "$ROCM_PATH/llvm/bin/llvm-readelf" -h vec_add.hsaco
           "$ROCM_PATH/llvm/bin/llvm-readelf" -s vec_add.hsaco | grep -E 'vec_add(\.kd)?'

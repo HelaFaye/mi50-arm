@@ -44,7 +44,7 @@ cmake --build build/gfx906 --parallel 2
 Generate the test HSACO with ROCm 6.3.3:
 
 ```bash
-hipcc --offload-arch=gfx906 --genco tests/vec_add.hip -o vec_add.hsaco
+hipcc --offload-arch=gfx906 --genco --no-gpu-bundle-output tests/vec_add.hip -o vec_add.hsaco
 ```
 
 `dispatch_gfx906` expects `vec_add.hsaco` in its current working directory

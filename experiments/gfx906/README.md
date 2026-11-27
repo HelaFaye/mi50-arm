@@ -29,7 +29,7 @@ cmake --build build/gfx906 --parallel 2
 With ROCm 6.3.3 installed, build a matching code object:
 
 ```bash
-hipcc --offload-arch=gfx906 --genco tests/vec_add.hip -o vec_add.hsaco
+hipcc --offload-arch=gfx906 --genco --no-gpu-bundle-output tests/vec_add.hip -o vec_add.hsaco
 ```
 
 The standalone dispatcher expects `vec_add.hsaco` in its current working
