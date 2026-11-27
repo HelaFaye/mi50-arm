@@ -1,0 +1,96 @@
+diff --git a/runtime/hsa-runtime/core/util/utils.h b/runtime/hsa-runtime/core/util/utils.h
+--- a/runtime/hsa-runtime/core/util/utils.h
++++ b/runtime/hsa-runtime/core/util/utils.h
+@@ -103,6 +103,26 @@
+ #error "Compiler and/or processor not identified."
+ #endif
+ 
++static __forceinline void CpuPause() {
++#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
++  _mm_pause();
++#elif defined(__aarch64__) || defined(__arm__)
++  __asm__ __volatile__("yield" ::: "memory");
++#else
++  std::this_thread::yield();
++#endif
++}
++
++static __forceinline void StoreFence() {
++#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
++  _mm_sfence();
++#elif defined(__aarch64__)
++  __asm__ __volatile__("dsb st" ::: "memory");
++#else
++  __atomic_thread_fence(__ATOMIC_RELEASE);
++#endif
++}
++
+ #define STRING2(x) #x
+ #define STRING(x) STRING2(x)
+ 
+diff --git a/runtime/hsa-runtime/core/util/locks.h b/runtime/hsa-runtime/core/util/locks.h
+--- a/runtime/hsa-runtime/core/util/locks.h
++++ b/runtime/hsa-runtime/core/util/locks.h
+@@ -72,7 +72,7 @@
+     while (!lock_.compare_exchange_strong(old, 1)) {
+       cnt--;
+       if (cnt > maxSpinIterPause) {
+-        _mm_pause();
++        CpuPause();
+       } else if (cnt-- > maxSpinIterYield) {
+         os::YieldThread();
+       } else {
+diff --git a/runtime/hsa-runtime/core/runtime/amd_aql_queue.cpp b/runtime/hsa-runtime/core/runtime/amd_aql_queue.cpp
+--- a/runtime/hsa-runtime/core/runtime/amd_aql_queue.cpp
++++ b/runtime/hsa-runtime/core/runtime/amd_aql_queue.cpp
+@@ -1551,7 +1551,7 @@
+   memcpy(&queue_slot[1], &slot_data[1], slot_size_b - sizeof(uint32_t));
+   if (core::Runtime::runtime_singleton_->flag().dev_mem_queue() && !agent_->is_xgmi_cpu_gpu()) {
+     // Ensure the packet body is written as header may get reordered when writing over PCIE
+-    _mm_sfence();
++    StoreFence();
+   }
+   atomic::Store(&queue_slot[0], slot_data[0], std::memory_order_release);
+ 
+diff --git a/runtime/hsa-runtime/core/runtime/amd_blit_kernel.cpp b/runtime/hsa-runtime/core/runtime/amd_blit_kernel.cpp
+--- a/runtime/hsa-runtime/core/runtime/amd_blit_kernel.cpp
++++ b/runtime/hsa-runtime/core/runtime/amd_blit_kernel.cpp
+@@ -1274,7 +1274,7 @@
+   std::atomic_thread_fence(std::memory_order_release);
+   if (core::Runtime::runtime_singleton_->flag().dev_mem_queue() && !queue_->needsPcieOrdering()) {
+     // Ensure the packet body is written as header may get reordered when writing over PCIE
+-    _mm_sfence();
++    StoreFence();
+   }
+   queue_buffer[index & queue_bitmask_].header = kDispatchPacketHeader;
+ 
+diff --git a/runtime/hsa-runtime/core/runtime/intercept_queue.cpp b/runtime/hsa-runtime/core/runtime/intercept_queue.cpp
+--- a/runtime/hsa-runtime/core/runtime/intercept_queue.cpp
++++ b/runtime/hsa-runtime/core/runtime/intercept_queue.cpp
+@@ -258,7 +258,7 @@
+       ring[barrier & mask].barrier_and.completion_signal = Signal::Convert(async_doorbell_);
+       if (Runtime::runtime_singleton_->flag().dev_mem_queue() && !needsPcieOrdering()) {
+         // Ensure the packet body is written as header may get reordered when writing over PCIE
+-        _mm_sfence();
++        StoreFence();
+       }
+       atomic::Store(&ring[barrier & mask].barrier_and.header, kBarrierHeader,
+                     std::memory_order_release);
+@@ -305,7 +305,7 @@
+       if (write_index != 0) {
+         if (Runtime::runtime_singleton_->flag().dev_mem_queue() && !needsPcieOrdering()) {
+           // Ensure the packet body is written as header may get reordered when writing over PCIE
+-          _mm_sfence();
++          StoreFence();
+         }
+         atomic::Store(&ring[write & mask].packet.header, packets[first_written_packet_index].packet.header,
+                       std::memory_order_release);
+@@ -374,7 +374,7 @@
+     handler.first(&ring[i & mask], 1, i, handler.second, PacketWriter);
+     if (Runtime::runtime_singleton_->flag().dev_mem_queue() && !needsPcieOrdering()) {
+       // Ensure the packet body is written as header may get reordered when writing over PCIE
+-      _mm_sfence();
++      StoreFence();
+     }
+     // Invalidate consumed packet.
+     atomic::Store(&ring[i & mask].packet.header, kInvalidHeader, std::memory_order_release);
