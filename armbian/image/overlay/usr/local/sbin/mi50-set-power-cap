@@ -14,7 +14,9 @@ fi
 FOUND=0
 APPLIED=0
 for pci in /sys/bus/pci/devices/*; do
-  [ -r "$pci/vendor" ] && [ -r "$pci/device" ] || continue
+  if [ ! -r "$pci/vendor" ] || [ ! -r "$pci/device" ]; then
+    continue
+  fi
   [ "$(cat "$pci/vendor")" = "0x1002" ] || continue
   [ "$(cat "$pci/device")" = "0x66a1" ] || continue
   FOUND=1
