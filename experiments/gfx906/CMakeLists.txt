@@ -6,18 +6,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_path(LIBDRM_INCLUDE_DIR NAMES xf86drm.h PATH_SUFFIXES libdrm REQUIRED)
+find_path(LIBDRM_UAPI_INCLUDE_DIR NAMES drm.h PATH_SUFFIXES libdrm REQUIRED)
 find_library(DRM_LIBRARY NAMES drm REQUIRED)
 find_library(DRM_AMDGPU_LIBRARY NAMES drm_amdgpu REQUIRED)
 find_package(Threads REQUIRED)
 
 add_library(hsa_drm_shim SHARED hsa_drm_shim.cpp)
-target_include_directories(hsa_drm_shim PRIVATE "${LIBDRM_INCLUDE_DIR}")
+target_include_directories(hsa_drm_shim PRIVATE "${LIBDRM_INCLUDE_DIR}" "${LIBDRM_UAPI_INCLUDE_DIR}")
 target_link_libraries(hsa_drm_shim PRIVATE "${DRM_AMDGPU_LIBRARY}" "${DRM_LIBRARY}" Threads::Threads)
 target_compile_options(hsa_drm_shim PRIVATE -Wall -Wextra -Wpedantic)
 set_target_properties(hsa_drm_shim PROPERTIES OUTPUT_NAME hsa-drm-shim)
 
 add_executable(dispatch_gfx906 dispatch_gfx906.cpp)
-target_include_directories(dispatch_gfx906 PRIVATE "${LIBDRM_INCLUDE_DIR}")
+target_include_directories(dispatch_gfx906 PRIVATE "${LIBDRM_INCLUDE_DIR}" "${LIBDRM_UAPI_INCLUDE_DIR}")
 target_link_libraries(dispatch_gfx906 PRIVATE "${DRM_AMDGPU_LIBRARY}" "${DRM_LIBRARY}")
 target_compile_options(dispatch_gfx906 PRIVATE -Wall -Wextra -Wpedantic)
 

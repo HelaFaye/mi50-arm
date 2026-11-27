@@ -21,6 +21,6 @@ jobs:
             d=$(mktemp -d); mkdir -p "$d/drivers/gpu/drm/amd/amdgpu"
             curl -sSfL "https://raw.githubusercontent.com/torvalds/linux/$tag/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c" \
               -o "$d/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c"
-            (cd "$d" && patch -p1 --dry-run < "$GITHUB_WORKSPACE"/patches/0001-*.patch) || { echo "does not apply to $tag"; exit 1; }
+            (cd "$d" && patch -p1 --dry-run < "$GITHUB_WORKSPACE"/patches/0001-drm-amdgpu-use-write-combined-GTT-on-non-coherent-hosts.patch) || { echo "does not apply to $tag"; exit 1; }
             echo "applies to $tag"
           done
