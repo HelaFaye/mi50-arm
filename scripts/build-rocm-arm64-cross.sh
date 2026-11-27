@@ -265,7 +265,7 @@ stage_sysroot() {
     (
       mnt=$(mktemp -d /tmp/mi50-sysroot-img.XXXXXX)
       loop=""
-      # shellcheck disable=SC2317 # Invoked indirectly by the EXIT trap below.
+      # shellcheck disable=SC2317,SC2329 # Invoked indirectly by the EXIT trap below.
       cleanup_img() {
         set +e
         if [ -n "$mnt" ] && mountpoint -q "$mnt"; then sudo umount "$mnt"; fi

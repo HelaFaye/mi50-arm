@@ -9,7 +9,9 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 log()  { printf '\n[mi50-image] %s\n' "$*"; }
 
 MI50_REPO="${MI50_REPO:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
-[ -n "$MI50_REPO" ] && [ -d "$MI50_REPO/.git" ] || fail 'Run from inside the mi50-arm Git checkout, or set MI50_REPO.'
+if [ -z "$MI50_REPO" ] || [ ! -d "$MI50_REPO/.git" ]; then
+    fail 'Run from inside the mi50-arm Git checkout, or set MI50_REPO.'
+fi
 MI50_REPO="$(cd "$MI50_REPO" && pwd -P)"
 
 VOLUME="${MI50_VOLUME:-/run/media/hela/19c7eeb5-52f1-4c37-8483-e37745655fc7}"
