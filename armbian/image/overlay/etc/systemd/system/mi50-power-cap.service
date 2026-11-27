@@ -1,0 +1,12 @@
+[Unit]
+Description=Set AMD MI50 power cap
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/mi50-rocm.env
+ExecStart=/usr/local/sbin/mi50-set-power-cap
+
+[Install]
+WantedBy=multi-user.target

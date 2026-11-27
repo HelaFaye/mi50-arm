@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CAP_UW=${MI50_POWER_CAP_UW:-165000000}
+if [[ ! "$CAP_UW" =~ ^[0-9]+$ ]]; then
+  echo "mi50 power-cap: invalid MI50_POWER_CAP_UW=$CAP_UW" >&2
+  exit 2
+fi
+if [ "$CAP_UW" -eq 0 ]; then
+  echo "mi50 power-cap: disabled (MI50_POWER_CAP_UW=0)"
+  exit 0
+fi
+
+FOUND=0
+APPLIED=0
+for pci in /sys/bus/pci/devices/*; do
+  [ -r "$pci/vendor" ] && [ -r "$pci/device" ] || continue
+  [ "$(cat "$pci/vendor")" = "0x1002" ] || continue
+  [ "$(cat "$pci/device")" = "0x66a1" ] || continue
+  FOUND=1
+  shopt -s nullglob
+  caps=("$pci"/hwmon/hwmon*/power1_cap)
+  shopt -u nullglob
+  if [ "${#caps[@]}" -eq 0 ]; then
+    echo "mi50 power-cap: found $pci but no power1_cap attribute" >&2
+    continue
+  fi
+  for cap in "${caps[@]}"; do
+    min="${cap%power1_cap}power1_cap_min"
+    max="${cap%power1_cap}power1_cap_max"
+    if [ -r "$min" ] && [ "$CAP_UW" -lt "$(cat "$min")" ]; then
+      echo "mi50 power-cap: $CAP_UW is below supported minimum $(cat "$min") for $cap" >&2
+      continue
+    fi
+    if [ -r "$max" ] && [ "$CAP_UW" -gt "$(cat "$max")" ]; then
+      echo "mi50 power-cap: $CAP_UW exceeds supported maximum $(cat "$max") for $cap" >&2
+      continue
+    fi
+    if printf '%s\n' "$CAP_UW" > "$cap"; then
+      actual=$(cat "$cap")
+      echo "mi50 power-cap: $pci set to $actual microwatts"
+      APPLIED=1
+    else
+      echo "mi50 power-cap: failed to write $cap" >&2
+    fi
+  done
+done
+
+if [ "$FOUND" -eq 0 ]; then
+  echo "mi50 power-cap: no AMD 1002:66a1 device found; nothing to do"
+  exit 0
+fi
+if [ "$APPLIED" -eq 0 ]; then
+  echo "mi50 power-cap: MI50 found but no cap was applied; continuing without a changed cap" >&2
+fi
+exit 0

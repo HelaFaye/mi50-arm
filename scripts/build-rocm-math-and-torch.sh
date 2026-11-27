@@ -11,6 +11,7 @@ export PYTORCH_ROCM_ARCH="gfx906"
 export HSA_USERPTR_FOR_PAGED_MEM=0
 # PyTorch 2.5.1's supported Python range does not include Python 3.13/3.14.
 PYTHON_BIN=${PYTHON_BIN:-python3}
+VENV=${VENV:-$HOME/venv-rocm}
 "$PYTHON_BIN" - <<'PYVER'
 import sys
 if not ((3, 9) <= sys.version_info[:2] < (3, 13)):
@@ -34,9 +35,9 @@ sudo apt-get install -y \
   libsqlite3-dev libbz2-dev libssl-dev libnuma-dev libelf-dev \
   python3-dev python3-pip python3-venv python3-yaml python3-msgpack python3-joblib
 
-"$PYTHON_BIN" -m venv "$HOME/venv-rocm"
+"$PYTHON_BIN" -m venv "$VENV"
 # shellcheck disable=SC1090,SC1091
-source "$HOME/venv-rocm/bin/activate"
+source "$VENV/bin/activate"
 pip install --upgrade pip wheel setuptools packaging ninja cmake pyyaml msgpack joblib numpy
 
 clone_rocm() {

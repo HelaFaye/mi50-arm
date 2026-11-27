@@ -51,6 +51,20 @@ checks = {
         and '"$ROCM_PATH/llvm/bin/llvm-readelf" -s vec_add.hsaco' in workflow
     ),
     "heavy self-hosted build is opt-in": "inputs.run_full_arm64_stack" in workflow,
+    "PyTorch venv path is configurable": (
+        'VENV=${VENV:-$HOME/venv-rocm}' in script
+        and '"$PYTHON_BIN" -m venv "$VENV"' in script
+        and 'source "$VENV/bin/activate"' in script
+    ),
+    "bitsandbytes GPU smoke tests can be skipped for image builds": (
+        'if [ "${SKIP_BNB_GPU_SMOKE:-0}" != 1 ]; then' in bnb
+        and 'SKIP_BNB_GPU_SMOKE=1: skipped GPU-dependent bitsandbytes diagnostics and NF4 test' in bnb
+    ),
+    "bitsandbytes retains a no-GPU import and ROCm shared-library load check": (
+        'import bitsandbytes as bnb' in bnb
+        and 'ctypes.CDLL(str(native_library))' in bnb
+        and 'libbitsandbytes_rocm63' in bnb
+    ),
 }
 
 failed = []

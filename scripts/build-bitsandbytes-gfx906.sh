@@ -87,8 +87,26 @@ if [ "$TORCH_VERSION_AFTER" != "$TORCH_VERSION_BEFORE" ]; then
 fi
 pip check
 
-python3 -m bitsandbytes
+# This import/shared-library check works without a visible MI50. It confirms
+# that the HIP build artifact is present and its dynamic dependencies resolve.
 python3 - <<'PY'
+import ctypes
+import torch
+import bitsandbytes as bnb
+from bitsandbytes.consts import DYNAMIC_LIBRARY_SUFFIX, PACKAGE_DIR
+
+if not torch.version.hip or torch.version.hip.split(".")[:2] != ["6", "3"]:
+    raise SystemExit(f"Expected a ROCm 6.3 PyTorch build, got {torch.version.hip!r}")
+native_library = PACKAGE_DIR / f"libbitsandbytes_rocm63{DYNAMIC_LIBRARY_SUFFIX}"
+if not native_library.is_file():
+    raise SystemExit(f"Missing gfx906 bitsandbytes ROCm library: {native_library}")
+ctypes.CDLL(str(native_library))
+print(f"bitsandbytes import and shared-library load PASSED: {native_library}")
+PY
+
+if [ "${SKIP_BNB_GPU_SMOKE:-0}" != 1 ]; then
+  python3 -m bitsandbytes
+  python3 - <<'PY'
 import torch
 import bitsandbytes as bnb
 assert torch.cuda.is_available(), "HIP device not detected by PyTorch"
@@ -102,3 +120,6 @@ loss.backward()
 assert x.grad is not None and not torch.isnan(x.grad).any(), "NF4 gradient check failed"
 print("bitsandbytes 4-bit NF4 forward/backward PASSED on gfx906")
 PY
+else
+  echo "SKIP_BNB_GPU_SMOKE=1: skipped GPU-dependent bitsandbytes diagnostics and NF4 test"
+fi

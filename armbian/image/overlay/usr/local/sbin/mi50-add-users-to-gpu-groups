@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATE=/var/lib/mi50-rocm/device-groups-configured
+[ -e "$STATE" ] && exit 0
+
+# Groups normally come from the base distribution. Create them only if a
+# minimal image omitted them, then apply access to existing normal accounts.
+for group in video render; do
+  if ! getent group "$group" >/dev/null; then
+    groupadd --system "$group"
+  fi
+done
+
+ADDED=0
+while IFS=: read -r name _ uid _ _ _ shell; do
+  [[ "$uid" =~ ^[0-9]+$ ]] || continue
+  [ "$uid" -ge 1000 ] || continue
+  [ "$name" != nobody ] || continue
+  case "$shell" in
+    */nologin|*/false) continue ;;
+  esac
+  usermod -a -G video,render "$name"
+  echo "mi50 device access: added $name to video,render"
+  ADDED=1
+done < /etc/passwd
+
+if [ "$ADDED" -eq 1 ]; then
+  mkdir -p "$(dirname "$STATE")"
+  touch "$STATE"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now mi50-device-access.timer >/dev/null 2>&1 || true
+  fi
+else
+  echo "mi50 device access: no normal user account exists yet; timer will retry"
+fi

@@ -48,6 +48,9 @@ on an M.2 to OCuLink adapter. Most of it also applies to other aarch64 hosts.
 
 ## Quick start
 
+For a prebuilt ROCm/PyTorch Armbian image, see [docs/ARMBIAN-IMAGE.md](docs/ARMBIAN-IMAGE.md).
+
+
 ```bash
 # 0. Hardware: external PSU on first, a blower fan on the MI50 (it is passively cooled)
 # 1. Host OS: Armbian (Debian trixie / Ubuntu noble) with a kernel built using

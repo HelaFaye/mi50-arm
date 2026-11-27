@@ -1,0 +1,4 @@
+# KFD and primary DRM nodes are in video; render nodes are in render.
+KERNEL=="kfd", GROUP="video", MODE="0660"
+SUBSYSTEM=="drm", KERNEL=="card[0-9]*", GROUP="video", MODE="0660"
+SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", GROUP="render", MODE="0660"

@@ -1,0 +1,7 @@
+[Unit]
+Description=Add local users to MI50 GPU device groups when accounts exist
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mi50-add-users-to-gpu-groups

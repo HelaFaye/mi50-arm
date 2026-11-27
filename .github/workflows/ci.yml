@@ -15,6 +15,10 @@ jobs:
         run: ./tests/test-cpu-threads-bench.sh
       - name: gpu-parity.sh with a stand-in test-backend-ops
         run: ./tests/test-gpu-parity.sh
+      - name: MI50 Armbian image integration static checks
+        run: python3 tests/test-mi50-armbian-image.py
+      - name: shellcheck MI50 Armbian image integration
+        run: shellcheck -x armbian/image/*.sh armbian/image/overlay/mi50-customize-image.sh armbian/image/overlay/usr/local/sbin/mi50-*
       - name: kernel patch applies to supported kernels
         run: |
           for tag in v6.12 v6.18 v7.3 master; do
