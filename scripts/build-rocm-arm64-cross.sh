@@ -30,7 +30,6 @@ TARGET_ROCM="$WORK_ROOT/target-rocm"
 TARGET_LLVM="$TARGET_ROCM/llvm"
 DOWNLOADS="$WORK_ROOT/downloads"
 STAGES=(preflight sysroot gl_dev_overlay toolchain host_venv fetch rocm_cmake host_llvm device_libs target_llvm comgr hipcc rocr rocminfo compiler_rt hip verify)
-STAGING_SYSROOT=""
 
 log() { printf '\n[mi50-cross] %s\n' "$*"; }
 die() { printf '[mi50-cross] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -259,7 +258,6 @@ stage_sysroot() {
   staging="$WORK_ROOT/sysroot.staging.$$"
   [ ! -e "$staging" ] || die "Staging path already exists: $staging; inspect it manually"
   mkdir -p "$staging"
-  STAGING_SYSROOT="$staging"
 
   if [ -n "$SYSROOT_SOURCE_IMG" ]; then
     [ -f "$SYSROOT_SOURCE_IMG" ] || die "SYSROOT_SOURCE_IMG does not exist: $SYSROOT_SOURCE_IMG"
@@ -267,6 +265,7 @@ stage_sysroot() {
     (
       mnt=$(mktemp -d /tmp/mi50-sysroot-img.XXXXXX)
       loop=""
+      # shellcheck disable=SC2317 # Invoked indirectly by the EXIT trap below.
       cleanup_img() {
         set +e
         if [ -n "$mnt" ] && mountpoint -q "$mnt"; then sudo umount "$mnt"; fi
@@ -315,7 +314,6 @@ stage_sysroot() {
   printf 'noble-arm64-gcc13\n' > "$staging/.mi50-sysroot-complete"
   if [ -d "$SYSROOT" ]; then rmdir "$SYSROOT"; fi
   mv "$staging" "$SYSROOT"
-  STAGING_SYSROOT=""
   log "Sysroot ready: $SYSROOT"
 }
 
@@ -1559,7 +1557,7 @@ EOF_CMAKE
   fi
 
   # A small C++ ABI canary is linked and checked before building ROCm sources.
-  local canary_dir canary
+  local canary_dir
   canary_dir="$BLD/abi-canary"
   mkdir -p "$canary_dir"
   cat > "$canary_dir/canary.cpp" <<'EOF_CPP'
@@ -1733,7 +1731,7 @@ stage_target_llvm() {
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_DIR/aarch64-noble-toolchain.cmake" \
     -DCMAKE_INSTALL_PREFIX="$TARGET_LLVM" \
-    -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib' \
+    -DCMAKE_INSTALL_RPATH="\$ORIGIN/../lib" \
     -DLLVM_HOST_TRIPLE=aarch64-unknown-linux-gnu \
     -DLLVM_DEFAULT_TARGET_TRIPLE=aarch64-unknown-linux-gnu \
     -DLLVM_TARGETS_TO_BUILD="AArch64;AMDGPU" \
@@ -2175,7 +2173,7 @@ run_stage() {
 }
 
 main() {
-  local mode=from start=preflight only= arg started=0 stage
+  local mode=from start=preflight only='' arg started=0 stage
   while [ "$#" -gt 0 ]; do
     arg=$1; shift
     case "$arg" in

@@ -17,8 +17,15 @@ jobs:
         run: ./tests/test-gpu-parity.sh
       - name: MI50 Armbian image integration static checks
         run: python3 tests/test-mi50-armbian-image.py
+      - name: MI50 Resolute preparation fixture and repeat-run test
+        run: python3 tests/test-mi50-resolute-prepare.py
       - name: shellcheck MI50 Armbian image integration
-        run: shellcheck -x armbian/image/*.sh armbian/image/overlay/mi50-customize-image.sh armbian/image/overlay/usr/local/sbin/mi50-*
+        run: >-
+          shellcheck -x armbian/image/*.sh
+          armbian/image/overlay/mi50-customize-image.sh
+          armbian/image/overlay/mi50-customize-image-resolute.sh
+          armbian/image/overlay/usr/local/sbin/mi50-*
+          tests/fixtures/mi50-resolute/run-customizer-inside-resolute.sh
       - name: kernel patch applies to supported kernels
         run: |
           for tag in v6.12 v6.18 v7.3 master; do
@@ -28,3 +35,12 @@ jobs:
             (cd "$d" && patch -p1 --dry-run < "$GITHUB_WORKSPACE"/patches/0001-drm-amdgpu-use-write-combined-GTT-on-non-coherent-hosts.patch) || { echo "does not apply to $tag"; exit 1; }
             echo "applies to $tag"
           done
+
+  resolute-arm64-customizer:
+    name: Execute image customizer on Ubuntu Resolute ARM64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run core payload customizer in a native ARM64 Resolute container
+        run: tests/test-mi50-resolute-customizer.sh
