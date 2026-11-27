@@ -10,3 +10,56 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  	target_compile_definitions(bitsandbytes PUBLIC NO_HIPBLASLT)
      else()
  	find_package(hipblaslt)
+diff --git a/csrc/compat.cuh b/csrc/compat.cuh
+--- a/csrc/compat.cuh
++++ b/csrc/compat.cuh
+@@ -146,7 +146,6 @@ using bnb_bfloat162 = __nv_bfloat162;
+ 
+ #ifndef NO_HIPBLASLT
+ #include <hipblaslt/hipblaslt.h>
+-#endif
+ 
+ using bnb_blasLt_handle_t = hipblasLtHandle_t;
+ using bnb_blasLt_matmul_desc_t = hipblasLtMatmulDesc_t;
+@@ -174,6 +173,10 @@ using bnb_blasLt_preference_t = hipblasLtMatmulPreference_t;
+ #define BNB_BLASLT_PTR_MODE_ALPHA_VEC HIPBLASLT_POINTER_MODE_ALPHA_DEVICE_VECTOR_BETA_HOST
+ 
+ using bnb_blasLt_heuristic_t = hipblasLtMatmulHeuristicResult_t;
++#else
++using bnb_blasLt_handle_t = void*;
++#endif
++
+ using bnb_blas_status_t = hipblasStatus_t;
+ #define BNB_BLAS_STATUS_SUCCESS HIPBLAS_STATUS_SUCCESS
+ 
+diff --git a/csrc/ops.cuh b/csrc/ops.cuh
+--- a/csrc/ops.cuh
++++ b/csrc/ops.cuh
+@@ -79,6 +79,7 @@ class Context {
+ #endif
+ };
+ 
++#if !BNB_HIP || !defined(NO_HIPBLASLT)
+ class ContextLt {
+   public:
+     bnb_blasLt_handle_t m_handle;
+@@ -89,6 +90,7 @@ class ContextLt {
+         m_handle = handle;
+     }
+ };
++#endif
+ 
+ // Function declarations
+ 
+diff --git a/csrc/pythonInterface.cpp b/csrc/pythonInterface.cpp
+--- a/csrc/pythonInterface.cpp
++++ b/csrc/pythonInterface.cpp
+@@ -18,7 +18,7 @@
+ // Compatibility between HIP/CUDA APIs
+ #if BUILD_HIP
+ #define cudaStream_t hipStream_t
+-#define cublasLtHandle_t hipblasLtHandle_t
++#define cublasLtHandle_t bnb_blasLt_handle_t
+ #define cudaMallocManaged hipMallocManaged
+ #define cudaMemAttachHost hipMemAttachHost
+ #define cudaPeekAtLastError hipPeekAtLastError

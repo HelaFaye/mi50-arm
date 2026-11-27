@@ -85,6 +85,7 @@ jobs:
           HIP_PLATFORM: amd
           AMDGPU_TARGETS: gfx906
         run: |
+          export PATH="$ROCM_PATH/bin:$ROCM_PATH/llvm/bin:$PATH"
           git init /tmp/bitsandbytes
           git -C /tmp/bitsandbytes remote add origin https://github.com/bitsandbytes-foundation/bitsandbytes.git
           git -C /tmp/bitsandbytes fetch --depth 1 origin f81c74f4496f16fe98a8939ceb50accd77c16e1c
