@@ -1,0 +1,120 @@
+name: gfx906 compile checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_full_arm64_stack:
+        description: "Build ROCm/PyTorch/bitsandbytes on a self-hosted ARM64 MI50 runner (hours; hardware required)"
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  host-cpp:
+    name: Compile libdrm experiments (${{ matrix.arch }}, no GPU required)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config libdrm-dev libdrm-amdgpu1 shellcheck
+      - name: Configure and compile experimental C++ sources
+        run: |
+          cmake -S experiments/gfx906 -B build/gfx906 -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/gfx906 --parallel 2
+          ctest --test-dir build/gfx906 --output-on-failure
+      - name: Validate shell and Python syntax
+        run: |
+          bash -n scripts/build-rocm-math-and-torch.sh
+          bash -n scripts/build-bitsandbytes-gfx906.sh
+          bash -n scripts/train-qwen14b-qlora.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          compile(Path("examples/train_qwen14b_qlora.py").read_text(), "examples/train_qwen14b_qlora.py", "exec")
+          PY
+          python3 tests/test-gfx906-pm4-headers.py
+          python3 tests/test-gfx906-source-safety.py
+          python3 tests/test-gfx906-rocm-build-plan.py
+          shellcheck scripts/build-rocm-math-and-torch.sh scripts/build-bitsandbytes-gfx906.sh scripts/train-qwen14b-qlora.sh
+
+  rocm-gfx906:
+    name: Generate gfx906 HSACO and compile bitsandbytes HIP backend
+    runs-on: ubuntu-22.04
+    container:
+      image: rocm/dev-ubuntu-22.04:6.3.3-complete
+    env:
+      ROCM_PATH: /opt/rocm
+    steps:
+      - name: Install ROCm container build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git cmake ninja-build
+          command -v git
+          command -v cmake
+          command -v ninja
+      - uses: actions/checkout@v4
+      - name: Show compiler and ROCm versions
+        run: |
+          "$ROCM_PATH/bin/hipcc" --version
+          "$ROCM_PATH/bin/hipconfig" --version
+          cmake --version
+          ninja --version
+          test -x "$ROCM_PATH/llvm/bin/llvm-readelf"
+      - name: Compile test kernel for gfx906
+        run: |
+          "$ROCM_PATH/bin/hipcc" --offload-arch=gfx906 --genco tests/vec_add.hip -o vec_add.hsaco
+          test -s vec_add.hsaco
+          "$ROCM_PATH/llvm/bin/llvm-readelf" -h vec_add.hsaco
+          "$ROCM_PATH/llvm/bin/llvm-readelf" -s vec_add.hsaco | grep -E 'vec_add(\.kd)?'
+      - name: Compile bitsandbytes HIP backend for gfx906
+        env:
+          ROCM_PATH: /opt/rocm
+          HIP_PLATFORM: amd
+          AMDGPU_TARGETS: gfx906
+        run: |
+          git init /tmp/bitsandbytes
+          git -C /tmp/bitsandbytes remote add origin https://github.com/bitsandbytes-foundation/bitsandbytes.git
+          git -C /tmp/bitsandbytes fetch --depth 1 origin f81c74f4496f16fe98a8939ceb50accd77c16e1c
+          git -C /tmp/bitsandbytes checkout --detach FETCH_HEAD
+          git -C /tmp/bitsandbytes apply --check "$GITHUB_WORKSPACE/patches/0001-bitsandbytes-disable-hipblaslt-gfx906.patch"
+          git -C /tmp/bitsandbytes apply "$GITHUB_WORKSPACE/patches/0001-bitsandbytes-disable-hipblaslt-gfx906.patch"
+          cmake -S /tmp/bitsandbytes -B /tmp/bitsandbytes/build-gfx906 -G Ninja \
+            -DCOMPUTE_BACKEND=hip \
+            -DBNB_ROCM_ARCH=gfx906 \
+            -DBNB_DISABLE_HIPBLASLT=ON \
+            -DCMAKE_HIP_ARCHITECTURES=gfx906 \
+            -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++ \
+            -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ \
+            -DCMAKE_PREFIX_PATH=/opt/rocm \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/bitsandbytes/build-gfx906 --parallel 2
+
+
+  full-arm64-mi50-stack:
+    name: Full ROCm/PyTorch/bitsandbytes build (self-hosted MI50)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_full_arm64_stack }}
+    runs-on: [self-hosted, linux, ARM64, mi50-arm64]
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ROCm 6.3.3 math libraries and PyTorch 2.5.1
+        env:
+          HSA_USERPTR_FOR_PAGED_MEM: "0"
+        run: scripts/build-rocm-math-and-torch.sh
+      - name: Build bitsandbytes gfx906 and run NF4 forward/backward smoke test
+        env:
+          HSA_USERPTR_FOR_PAGED_MEM: "0"
+        run: scripts/build-bitsandbytes-gfx906.sh

@@ -1,0 +1,12 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -452,7 +452,7 @@
+     set_source_files_properties(${GPU_FILES} PROPERTIES LANGUAGE HIP)
+     set_target_properties(bitsandbytes PROPERTIES LINKER_LANGUAGE CXX)
+ 
+-    if(HIP_VERSION VERSION_LESS "6.1")
++    if(HIP_VERSION VERSION_LESS "6.1" OR BNB_DISABLE_HIPBLASLT)
+ 	target_compile_definitions(bitsandbytes PUBLIC NO_HIPBLASLT)
+     else()
+ 	find_package(hipblaslt)

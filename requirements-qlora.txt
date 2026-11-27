@@ -1,0 +1,29 @@
+# Install after the custom ROCm-enabled PyTorch wheel and bitsandbytes build.
+# The set is intentionally explicit so `pip --no-deps` cannot replace torch.
+transformers==4.46.3
+peft==0.13.2
+trl==0.12.1
+accelerate==1.1.1
+datasets==3.1.0
+
+# Runtime dependencies needed by the pinned HF packages.
+numpy==1.26.4
+packaging==24.2
+PyYAML==6.0.2
+regex==2024.11.6
+requests==2.32.3
+tqdm==4.67.1
+filelock==3.16.1
+psutil==6.1.0
+pandas==2.2.3
+pyarrow==18.1.0
+dill==0.3.8
+multiprocess==0.70.16
+fsspec[http]==2024.9.0
+xxhash==3.5.0
+rich==13.9.4
+tyro==0.9.2
+safetensors==0.4.5
+tokenizers==0.20.3
+huggingface-hub==0.26.2
+scipy==1.14.1
