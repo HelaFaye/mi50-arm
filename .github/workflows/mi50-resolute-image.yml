@@ -1,0 +1,83 @@
+name: MI50 Resolute image rebuild
+
+on:
+  workflow_dispatch:
+    inputs:
+      rebuild_rocm:
+        description: Rebuild the ARM64 ROCm/HIP core prefix; disable to reuse the prefix cached on the image-builder runner
+        type: boolean
+        required: true
+        default: true
+      armbian_ref:
+        description: Pinned Armbian build-framework commit, tag, or branch
+        type: string
+        required: true
+        default: db15c9ea657a9723dfb62d0c862d17a33987d12a
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mi50-resolute-image-rebuild
+  cancel-in-progress: false
+
+jobs:
+  validate_source:
+    name: Validate rebuild inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+      - name: Validate scripts and Resolute staging fixture
+        run: |
+          bash -n scripts/ci-build-mi50-resolute-image.sh
+          bash -n scripts/verify-mi50-resolute-image.sh
+          shellcheck -x scripts/*.sh
+          python3 tests/test-mi50-resolute-prepare.py
+          python3 tests/test-mi50-resolute-ci.py
+
+  rebuild_rocm:
+    name: Rebuild ARM64 ROCm/HIP prefix
+    if: ${{ inputs.rebuild_rocm }}
+    needs: validate_source
+    runs-on: [self-hosted, linux, x64, mi50-image-builder]
+    timeout-minutes: 360
+    env:
+      MI50_BUILDER_ROOT: ${{ vars.MI50_BUILDER_ROOT || '/mnt/mi50-builder' }}
+      MI50_ARMBIAN_REF: ${{ inputs.armbian_ref }}
+      MI50_BUILD_JOBS: '4'
+      MI50_LLVM_JOBS: '4'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and validate ARM64 ROCm/HIP core prefix
+        run: scripts/ci-build-mi50-resolute-image.sh rocm
+
+  rebuild_image:
+    name: Rebuild and audit Orange Pi 5 Plus image
+    needs: [validate_source, rebuild_rocm]
+    if: >-
+      ${{
+        always() &&
+        needs.validate_source.result == 'success' &&
+        (needs.rebuild_rocm.result == 'success' || needs.rebuild_rocm.result == 'skipped')
+      }}
+    runs-on: [self-hosted, linux, x64, mi50-image-builder]
+    timeout-minutes: 360
+    env:
+      MI50_BUILDER_ROOT: ${{ vars.MI50_BUILDER_ROOT || '/mnt/mi50-builder' }}
+      MI50_ARMBIAN_REF: ${{ inputs.armbian_ref }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build, verify, and compress Resolute image
+        run: scripts/ci-build-mi50-resolute-image.sh image
+      - name: Retain build manifest, checksums, and Armbian log
+        uses: actions/upload-artifact@v4
+        with:
+          name: mi50-resolute-build-report-${{ github.run_id }}
+          path: ${{ runner.temp }}/mi50-image-report/
+          if-no-files-found: error
+          retention-days: 30

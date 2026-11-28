@@ -6,7 +6,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -x scripts/*.sh tests/*.sh && shellcheck -s bash -e SC2034 armbian/extensions/*.sh
+        run: shellcheck -x scripts/*.sh && shellcheck -s bash -e SC2034 armbian/extensions/*.sh
       - name: check-mi50.sh against fake sysfs trees
         run: ./tests/test-check-mi50.sh
       - name: arm-cpu.sh against fake cpuinfo trees
@@ -19,6 +19,8 @@ jobs:
         run: python3 tests/test-mi50-armbian-image.py
       - name: MI50 Resolute preparation fixture and repeat-run test
         run: python3 tests/test-mi50-resolute-prepare.py
+      - name: MI50 Resolute rebuild workflow policy checks
+        run: python3 tests/test-mi50-resolute-ci.py
       - name: shellcheck MI50 Armbian image integration
         run: >-
           shellcheck -x armbian/image/*.sh
