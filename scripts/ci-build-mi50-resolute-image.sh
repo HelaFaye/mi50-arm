@@ -52,7 +52,9 @@ fi
 
 [ "$(uname -m)" = x86_64 ] || fail "The ROCm cross-build requires an x86_64 host; found $(uname -m)"
 MEM_KB=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
-[ -n "$MEM_KB" ] && [ "$MEM_KB" -ge $((24 * 1024 * 1024)) ] || fail 'Need at least 24 GiB RAM for ROCm/LLVM and Armbian builds'
+if ! [[ "$MEM_KB" =~ ^[0-9]+$ ]] || (( MEM_KB < 24 * 1024 * 1024 )); then
+  fail 'Need at least 24 GiB RAM for ROCm/LLVM and Armbian builds'
+fi
 for cmd in git clang clang++ ld.lld llvm-objcopy llvm-strip cmake ninja python3 pkg-config readelf findmnt tar patch qemu-aarch64-static mmdebstrap docker zstd fdisk blkid losetup mount umount mountpoint sha256sum file; do
   command -v "$cmd" >/dev/null 2>&1 || fail "Missing builder prerequisite: $cmd"
 done
@@ -119,10 +121,10 @@ if [ "$MODE" = rocm ]; then
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
       printf '\n## MI50 ROCm ARM64 prefix build\n\n'
-      printf -- '- ROCm source tag: `%s`\n' "$ROCM_VER"
-      printf -- '- Prefix: `%s`\n' "$WORK_ROOT/target-rocm"
-      printf -- '- Armbian reference: `%s`\n' "$ARMBIAN_REF"
-      printf -- '- Prefix disk usage: `%s`\n' "$(du -sh "$WORK_ROOT/target-rocm" | awk '{print $1}')"
+      printf '%s\n' "- ROCm source tag: \`$ROCM_VER\`"
+      printf '%s\n' "- Prefix: \`$WORK_ROOT/target-rocm\`"
+      printf '%s\n' "- Armbian reference: \`$ARMBIAN_REF\`"
+      printf '%s\n' "- Prefix disk usage: \`$(du -sh "$WORK_ROOT/target-rocm" | awk '{print $1}')\`"
     } >> "$GITHUB_STEP_SUMMARY"
   fi
   exit 0
@@ -156,7 +158,9 @@ BUILD_STARTED=$(date +%s)
 IMAGE=$(find "$CLEAN/output/images" -maxdepth 1 -type f \
   -name 'Armbian-unofficial*Orangepi5-plus*resolute*current*6.18*kde-plasma*desktop.img' \
   -printf '%T@ %p\n' 2>/dev/null | sort -nr | sed -n '1p' | cut -d ' ' -f 2-)
-[ -n "$IMAGE" ] && [ -f "$IMAGE" ] || fail 'Could not locate the generated Resolute Orange Pi 5 Plus image'
+if [ -z "$IMAGE" ] || [ ! -f "$IMAGE" ]; then
+  fail 'Could not locate the generated Resolute Orange Pi 5 Plus image'
+fi
 IMAGE=$(realpath "$IMAGE")
 IMAGE_MTIME=$(stat -c %Y "$IMAGE")
 [ "$IMAGE_MTIME" -ge "$BUILD_STARTED" ] || fail "Newest image predates this build invocation: $IMAGE"
@@ -164,7 +168,9 @@ IMAGE_MTIME=$(stat -c %Y "$IMAGE")
 log 'Checking that the latest Armbian build log records the MI50 GTT patch and object compilation.'
 BUILD_LOG=$(find "$CLEAN/output/logs" -maxdepth 1 -type f -name 'log-build-*.log.ans' \
   -printf '%T@ %p\n' 2>/dev/null | sort -nr | sed -n '1p' | cut -d ' ' -f 2-)
-[ -n "$BUILD_LOG" ] && [ -f "$BUILD_LOG" ] || fail 'Armbian build log not found'
+if [ -z "$BUILD_LOG" ] || [ ! -f "$BUILD_LOG" ]; then
+  fail 'Armbian build log not found'
+fi
 grep -Fq '0001-drm-amdgpu-use-write-combined-GTT-on-non-coherent-hosts' "$BUILD_LOG" \
   || fail 'Latest Armbian build log does not show the MI50 GTT patch'
 grep -Fq 'amdgpu_gtt_mgr.o' "$BUILD_LOG" \
@@ -249,12 +255,12 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
     printf '\n## MI50 Resolute image rebuild\n\n'
     printf '| Item | Result |\n|---|---|\n'
-    printf '| Raw image | `%s` |\n' "$IMAGE"
-    printf '| Raw SHA-256 | `%s` |\n' "$IMAGE_SHA"
-    printf '| Zstandard image | `%s` |\n' "$COMPRESSED"
-    printf '| Zstandard SHA-256 | `%s` |\n' "$COMPRESSED_SHA"
-    printf '| Manifest | `%s` |\n' "$MANIFEST"
-    printf '| Armbian commit | `%s` |\n' "$(git -C "$CLEAN" rev-parse HEAD)"
+    printf '%s\n' "| Raw image | \`$IMAGE\` |"
+    printf '%s\n' "| Raw SHA-256 | \`$IMAGE_SHA\` |"
+    printf '%s\n' "| Zstandard image | \`$COMPRESSED\` |"
+    printf '%s\n' "| Zstandard SHA-256 | \`$COMPRESSED_SHA\` |"
+    printf '%s\n' "| Manifest | \`$MANIFEST\` |"
+    printf '%s\n' "| Armbian commit | \`$(git -C "$CLEAN" rev-parse HEAD)\` |"
     printf '| MI50 GTT patch | applied and compiled |\n'
     printf '| Rootfs / ROCm audit | passed |\n'
     printf '\nImages remain on the self-hosted builder at the paths above; the 16 GiB disk image is not uploaded to Actions artifact storage.\n'
